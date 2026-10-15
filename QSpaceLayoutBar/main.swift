@@ -90,6 +90,37 @@ func restartQSpace() {
     logLine("restartQSpace: done, running=\(qspaceRunning())")
 }
 
+/// 原子写 conf：先退出 QSpace（防内存回写覆盖）→ 写 → 重启 QSpace → 轮询等起来
+/// 全程快速轮询（0.15~0.2s 步进），总耗时压在 4 秒内
+func atomicWriteConfAndRestartQSpace(_ conf: [String: Any]) {
+    let config = NSWorkspace.OpenConfiguration()
+    if let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.jinghaoshe.qspace.pro").first {
+        app.terminate()
+        for _ in 0..<12 {
+            usleep(150_000)
+            if app.isTerminated { break }
+        }
+        if !app.isTerminated {
+            app.forceTerminate()
+            for _ in 0..<12 {
+                usleep(150_000)
+                if app.isTerminated { break }
+            }
+        }
+    }
+    writeConf(conf)
+    logLine("atomicWrite: conf written while QSpace stopped")
+    NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: qspaceApp),
+                                       configuration: config,
+                                       completionHandler: nil)
+    for _ in 0..<25 {
+        usleep(200_000)
+        if qspaceRunning() { break }
+    }
+    Thread.sleep(forTimeInterval: 2)  // 渲染稳定
+    logLine("atomicWrite: done, running=\(qspaceRunning())")
+}
+
 func logLine(_ msg: String) {
     let line = "\(Date()): \(msg)\n"
     if let handle = FileHandle(forWritingAtPath: logPath) {
@@ -299,23 +330,7 @@ func restoreLayout(at url: URL, restart: Bool = true) {
         // 关键竞态修复：QSpace 运行中会周期性用内存覆盖 conf——必须先退出 QSpace
         // 再写 conf，最后启动 QSpace 读取，否则写入会被内存回写覆盖
         appDelegate?.setBusy(true)
-        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.jinghaoshe.qspace.pro").first {
-            app.terminate()
-            for _ in 0..<25 {
-                Thread.sleep(forTimeInterval: 0.2)
-                if app.isTerminated { break }
-            }
-            if !app.isTerminated {
-                app.forceTerminate()
-                for _ in 0..<25 {
-                    Thread.sleep(forTimeInterval: 0.2)
-                    if app.isTerminated { break }
-                }
-            }
-        }
-        writeConf(conf)
-        logLine("restoreLayout: conf written while QSpace stopped")
-        restartQSpace()  // conf 已就位，此时启动 QSpace 读入新状态
+        atomicWriteConfAndRestartQSpace(conf)
         appDelegate?.setBusy(false)
         appDelegate?.rebuildMenu()
         notify("已恢复「\(currentLayoutName)」：匹配 \(matched) 个, 保留新增 \(keptNew) 个")
@@ -437,17 +452,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         RunLoop.main.add(poll, forMode: .common)
-        // 合盖（睡眠前）：写 conf 不重启，反正要睡了
+        // 合盖（睡眠前）：绑定方案则先退出 QSpace 再写 conf（防内存回写）
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
             applyBoundLayout(kind: "sleep", restart: false)
         }
-        // 开盖（唤醒后）：延迟 5 秒恢复绑定方案 + 查每日保存
+        // 开盖（唤醒后 4 秒，等系统完成屏幕重构）：绑定方案优先，否则按指纹匹配，然后时光机存档
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                applyBoundLayout(kind: "wake", restart: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                if UserDefaults.standard.string(forKey: "wakeLayout") != nil {
+                    applyBoundLayout(kind: "wake", restart: true)
+                } else {
+                    autoSwitchIfNeeded()
+                }
                 monitorLayoutChanges()
+                lastKnownFingerprint = currentFingerprint()
             }
         }
         // 时光机监测：启动 20 秒先跑一次，之后每 30 分钟
