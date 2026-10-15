@@ -475,7 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(cur)
         menu.addItem(.separator())
 
-        // 手动方案（子菜单：重命名/删除）
+        // 手动方案（子菜单：应用/重命名/删除）
         for url in layoutURLs() {
             guard let d = FileManager.default.contents(atPath: url.path),
                   let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
@@ -483,22 +483,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let isAuto = (snap["isAuto"] as? Bool) == true
             if isAuto { continue }
 
-            let it = NSMenuItem(title: name, action: #selector(restoreClicked(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = url.path
+            let it = NSMenuItem(title: name, action: nil, keyEquivalent: "")
             if name == currentLayoutName { it.state = .on }
 
             let sub = NSMenu()
+            let apply = NSMenuItem(title: "⭐ 应用这个方案", action: #selector(restoreClicked(_:)), keyEquivalent: "")
+            apply.target = self; apply.representedObject = url.path
             let ren = NSMenuItem(title: "重命名…", action: #selector(renameClicked(_:)), keyEquivalent: "")
             ren.target = self; ren.representedObject = url.path
             let del = NSMenuItem(title: "删除", action: #selector(deleteClicked(_:)), keyEquivalent: "")
             del.target = self; del.representedObject = url.path
-            sub.addItem(ren); sub.addItem(del)
+            sub.addItem(apply); sub.addItem(.separator()); sub.addItem(ren); sub.addItem(del)
             it.submenu = sub
             menu.addItem(it)
         }
 
-        // 自动备份区（子菜单形态：鼠标移过去展开）
+        // 自动备份区（子菜单：应用快照）
         let autos = layoutURLs().filter {
             guard let d = FileManager.default.contents(atPath: $0.path),
                   let s = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return false }
@@ -511,10 +511,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let d = FileManager.default.contents(atPath: url.path),
                       let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
                 let name = snap["name"] as? String ?? "自动"
-                let it = NSMenuItem(title: name, action: #selector(restoreClicked(_:)), keyEquivalent: "")
-                it.target = self
-                it.representedObject = url.path
+                let it = NSMenuItem(title: name, action: nil, keyEquivalent: "")
                 if name == currentLayoutName { it.state = .on }
+
+                let applySub = NSMenu()
+                let ap = NSMenuItem(title: "⭐ 应用这个快照", action: #selector(restoreClicked(_:)), keyEquivalent: "")
+                ap.target = self; ap.representedObject = url.path
+                applySub.addItem(ap)
+                it.submenu = applySub
                 sub.addItem(it)
             }
             head.submenu = sub
