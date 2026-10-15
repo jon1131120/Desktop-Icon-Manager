@@ -115,6 +115,18 @@ func notify(_ msg: String) {
 
 // MARK: - 布局保存
 
+/// 当前状态的两态判定（杰哥的图标全在内置屏，外接屏只是扩展区——所以按内置屏在场与否区分即可）
+func screenTypeName() -> String {
+    var builtin = false
+    for screen in NSScreen.screens {
+        if let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+           CGDisplayIsBuiltin(id) != 0 {
+            builtin = true
+        }
+    }
+    return builtin ? "内置屏" : "外置屏"
+}
+
 func saveLayout(named name: String, isAuto: Bool = false) {
     guard var conf = loadConf(),
           let attrs = conf["itemAttrs"] as? [[String: Any]] else {
@@ -122,15 +134,17 @@ func saveLayout(named name: String, isAuto: Bool = false) {
         return
     }
     let fp = currentFingerprint()
+    let screenType = screenTypeName()
     let df = DateFormatter()
     df.dateFormat = "MM-dd_HHmm"
     let safeStamp = df.string(from: Date())  // 文件名安全格式（无 / : 等非法字符）
     let displayStamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
-    let rawName = isAuto ? "\(autoPrefix)\(safeStamp)" : name
+    let rawName = isAuto ? "\(autoPrefix)[\(screenType)] \(safeStamp)" : name
     let finalName = rawName.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
     let snapshot: [String: Any] = [
         "name": finalName,
         "savedAt": displayStamp,
+        "screenType": screenType,
         "screens": [fp],
         "fingerprint": fp,
         "iconCount": attrs.count,
@@ -211,7 +225,6 @@ func monitorLayoutChanges() {
     }
 
     var maxRatioToAny = 0.0        // 规则②：与所有已知条目的最大差异
-    var minRatioToAny = 1.0        // 防冗余：与所有已知条目的最小差异
     var lastAutoAttrs: [[String: Any]]?
     var lastAutoMtime = Date.distantPast
 
@@ -221,8 +234,8 @@ func monitorLayoutChanges() {
               let attrs = s["itemAttrs"] as? [[String: Any]] else { continue }
         let r = changeRatio(between: cur, and: attrs)
         maxRatioToAny = max(maxRatioToAny, r)
-        minRatioToAny = min(minRatioToAny, r)
-        if (s["isAuto"] as? Bool) == true {
+        let isAuto = (s["isAuto"] as? Bool) == true
+        if isAuto {
             let mt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
             if mt > lastAutoMtime {
                 lastAutoMtime = mt
@@ -234,13 +247,15 @@ func monitorLayoutChanges() {
     let ratioToLastAuto = lastAutoAttrs != nil ? changeRatio(between: cur, and: lastAutoAttrs!) : 1.0
     let hoursSince = Date().timeIntervalSince(lastAutoMtime) / 3600.0
     let rule1 = ratioToLastAuto >= changeThreshold                       // 漂移检测：相对上一条大改
-    let rule2 = maxRatioToAny >= changeThreshold                         // 离锚检测：偏离所有已知布局
+    let rule2 = maxRatioToAny >= changeThreshold                         // 离锚检测：偏离所有手动方案锚点
     let rule3 = hoursSince >= minHoursBetweenSnapshots && ratioToLastAuto > 0  // 保底：每天至少一条
-    let redundant = minRatioToAny < redundantThreshold                   // 防冗余：几乎没变不记
+    // 防冗余只对比最近一条自动快照，且只压制大改触发；24h 保底不受冗余限制（每天至少一个还原点的承诺）
+    let redundant = lastAutoAttrs != nil && ratioToLastAuto < redundantThreshold
+    let shouldSave = (rule1 || rule2) && !redundant || rule3
 
-    logLine("monitor: R1(\(rule1)) R2(\(rule2)) R3(\(rule3)) redundant(\(redundant)) lastAuto=\(Int(ratioToLastAuto*100))% maxAny=\(Int(maxRatioToAny*100))%")
+    logLine("monitor: R1(\(rule1)) R2(\(rule2)) R3(\(rule3)) redundant(\(redundant)) -> save=\(shouldSave) lastAuto=\(Int(ratioToLastAuto * 100))% maxAny=\(Int(maxRatioToAny * 100))%")
 
-    if (rule1 || rule2 || rule3), !redundant {
+    if shouldSave {
         saveLayout(named: "", isAuto: true)
         pruneAutoSnapshots()
         notify("⏱ 检测到布局大改（\(Int(ratioToLastAuto * 100))%），已自动存档")
@@ -259,7 +274,7 @@ func restoreLayout(at url: URL, restart: Bool = true) {
         return
     }
     let snapIndex = Dictionary(snapAttrs.map { ($0["name"] as? String ?? "", $0) },
-                               uniquingKeysWith: { _, new in new }) // duplicate names exist in real data (e.g. multiple /Volumes/Untitled entries) — keep the latest, never crash
+                               uniquingKeysWith: { _, new in new })
 
     var matched = 0, keptNew = 0
     var newAttrs: [[String: Any]] = []
@@ -278,15 +293,34 @@ func restoreLayout(at url: URL, restart: Bool = true) {
     conf["itemAttrs"] = newAttrs
     if let sp = snap["itemVSpacing"] { conf["itemVSpacing"] = sp }
     if let sb = snap["showItemBriefInfo"] { conf["showItemBriefInfo"] = sb }
-    writeConf(conf)
     currentLayoutName = (snap["name"] as? String) ?? url.deletingPathExtension().lastPathComponent
 
     if restart {
+        // 关键竞态修复：QSpace 运行中会周期性用内存覆盖 conf——必须先退出 QSpace
+        // 再写 conf，最后启动 QSpace 读取，否则写入会被内存回写覆盖
         appDelegate?.setBusy(true)
-        restartQSpace()
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.jinghaoshe.qspace.pro").first {
+            app.terminate()
+            for _ in 0..<25 {
+                Thread.sleep(forTimeInterval: 0.2)
+                if app.isTerminated { break }
+            }
+            if !app.isTerminated {
+                app.forceTerminate()
+                for _ in 0..<25 {
+                    Thread.sleep(forTimeInterval: 0.2)
+                    if app.isTerminated { break }
+                }
+            }
+        }
+        writeConf(conf)
+        logLine("restoreLayout: conf written while QSpace stopped")
+        restartQSpace()  // conf 已就位，此时启动 QSpace 读入新状态
         appDelegate?.setBusy(false)
         appDelegate?.rebuildMenu()
         notify("已恢复「\(currentLayoutName)」：匹配 \(matched) 个, 保留新增 \(keptNew) 个")
+    } else {
+        writeConf(conf)
     }
 }
 
