@@ -122,11 +122,15 @@ func saveLayout(named name: String, isAuto: Bool = false) {
         return
     }
     let fp = currentFingerprint()
-    let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
-    let finalName = isAuto ? "\(autoPrefix)\(stamp)" : name
+    let df = DateFormatter()
+    df.dateFormat = "MM-dd_HHmm"
+    let safeStamp = df.string(from: Date())  // 文件名安全格式（无 / : 等非法字符）
+    let displayStamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
+    let rawName = isAuto ? "\(autoPrefix)\(safeStamp)" : name
+    let finalName = rawName.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
     let snapshot: [String: Any] = [
         "name": finalName,
-        "savedAt": stamp,
+        "savedAt": displayStamp,
         "screens": [fp],
         "fingerprint": fp,
         "iconCount": attrs.count,
@@ -137,8 +141,16 @@ func saveLayout(named name: String, isAuto: Bool = false) {
     ]
     try? FileManager.default.createDirectory(atPath: layoutDir, withIntermediateDirectories: true)
     let url = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName).json")
-    guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted]) else { return }
-    try? data.write(to: url)
+    guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted]) else {
+        logLine("saveLayout: 序列化失败")
+        return
+    }
+    do {
+        try data.write(to: url)
+        logLine("saveLayout: 已写入「\(finalName)」(\(attrs.count) 图标)")
+    } catch {
+        logLine("saveLayout: 写入失败 \(error)")
+    }
     currentLayoutName = finalName
     appDelegate?.rebuildMenu()
     if !isAuto { notify("已保存布局「\(name)」（\(fp)）") }
