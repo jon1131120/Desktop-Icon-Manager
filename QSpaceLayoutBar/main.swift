@@ -8,7 +8,12 @@ let logPath = NSString(string: "~/qspace-layouts/app.log").expandingTildeInPath
 let qspaceApp = "/Applications/QSpace Pro.app"
 let launchAgentPlist = NSString(string: "~/Library/LaunchAgents/com.jon1131120.qspacelayoutbar.plist").expandingTildeInPath
 let autoPrefix = "自动 "
-let maxAutoSnapshots = 5
+let maxAutoSnapshots = 10
+// 时光机监测参数（Desktop OK 式：拉开差距才记）
+let monitorIntervalSec: TimeInterval = 1800   // 每 30 分钟监测一次
+let changeThreshold = 0.20                    // 变化 ≥20% 视为大改
+let redundantThreshold = 0.05                 // 差异 <5% 视为冗余不记
+let minHoursBetweenSnapshots: TimeInterval = 24  // 两条自动快照最小间隔（保底触发）
 
 var appDelegate: AppDelegate?
 var currentLayoutName = "（未知）"
@@ -16,6 +21,7 @@ var lastKnownFingerprint = ""
 var autoSwitchOn = UserDefaults.standard.object(forKey: "autoSwitchOn") == nil
     ? true
     : UserDefaults.standard.bool(forKey: "autoSwitchOn")
+var autoMonitorOn = UserDefaults.standard.object(forKey: "autoMonitorOff") == nil
 
 // MARK: - 基础工具
 
@@ -155,6 +161,80 @@ func pruneAutoSnapshots() {
 
 // MARK: - 布局恢复（容错铁律：绝不报错刷屏，绝不因文件增删停工）
 
+
+// MARK: - 时光机（Desktop OK 式自动快照）
+
+/// 计算两组图标属性的差异率（0.0~1.0）：位置变化 + 新增 + 删除，除以总数
+func changeRatio(between a: [[String: Any]], and b: [[String: Any]]) -> Double {
+    func posMap(_ arr: [[String: Any]]) -> [String: [Int]] {
+        var m: [String: [Int]] = [:]
+        for item in arr {
+            guard let n = item["name"] as? String else { continue }
+            m[n] = [item["x"] as? Int ?? -1, item["y"] as? Int ?? -1]
+        }
+        return m
+    }
+    let am = posMap(a), bm = posMap(b)
+    let all = Set(am.keys).union(bm.keys)
+    guard !all.isEmpty else { return 0 }
+    var changed = 0
+    for n in all {
+        switch (am[n], bm[n]) {
+        case (.some(let x), .some(let y)): if x != y { changed += 1 }
+        default: changed += 1  // 一方缺失 = 新增或删除
+        }
+    }
+    return Double(changed) / Double(all.count)
+}
+
+/// 时光机监测：三规则 + 防冗余，决定是否自动存一条新快照
+func monitorLayoutChanges() {
+    guard autoMonitorOn else {
+        logLine("monitor: off, skip")
+        return
+    }
+    guard let conf = loadConf(), let cur = conf["itemAttrs"] as? [[String: Any]] else {
+        logLine("monitor: conf unreadable, skip")
+        return
+    }
+
+    var maxRatioToAny = 0.0        // 规则②：与所有已知条目的最大差异
+    var minRatioToAny = 1.0        // 防冗余：与所有已知条目的最小差异
+    var lastAutoAttrs: [[String: Any]]?
+    var lastAutoMtime = Date.distantPast
+
+    for url in layoutURLs() {
+        guard let d = FileManager.default.contents(atPath: url.path),
+              let s = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let attrs = s["itemAttrs"] as? [[String: Any]] else { continue }
+        let r = changeRatio(between: cur, and: attrs)
+        maxRatioToAny = max(maxRatioToAny, r)
+        minRatioToAny = min(minRatioToAny, r)
+        if (s["isAuto"] as? Bool) == true {
+            let mt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if mt > lastAutoMtime {
+                lastAutoMtime = mt
+                lastAutoAttrs = attrs
+            }
+        }
+    }
+
+    let ratioToLastAuto = lastAutoAttrs != nil ? changeRatio(between: cur, and: lastAutoAttrs!) : 1.0
+    let hoursSince = Date().timeIntervalSince(lastAutoMtime) / 3600.0
+    let rule1 = ratioToLastAuto >= changeThreshold                       // 漂移检测：相对上一条大改
+    let rule2 = maxRatioToAny >= changeThreshold                         // 离锚检测：偏离所有已知布局
+    let rule3 = hoursSince >= minHoursBetweenSnapshots && ratioToLastAuto > 0  // 保底：每天至少一条
+    let redundant = minRatioToAny < redundantThreshold                   // 防冗余：几乎没变不记
+
+    logLine("monitor: R1(\(rule1)) R2(\(rule2)) R3(\(rule3)) redundant(\(redundant)) lastAuto=\(Int(ratioToLastAuto*100))% maxAny=\(Int(maxRatioToAny*100))%")
+
+    if (rule1 || rule2 || rule3), !redundant {
+        saveLayout(named: "", isAuto: true)
+        pruneAutoSnapshots()
+        notify("⏱ 检测到布局大改（\(Int(ratioToLastAuto * 100))%），已自动存档")
+    }
+}
+
 func restoreLayout(at url: URL, restart: Bool = true) {
     guard let snapData = FileManager.default.contents(atPath: url.path),
           let snap = try? JSONSerialization.jsonObject(with: snapData) as? [String: Any],
@@ -221,23 +301,6 @@ func autoSwitchIfNeeded() {
     logLine("autoSwitch: no layout matched fp=\(fp)")
     currentLayoutName = "（未匹配）"
     appDelegate?.rebuildMenu()
-}
-
-// MARK: - 每日自动保存（保留最近 5 个）
-
-func dailyAutoSave() {
-    let today = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .none)
-    let last = UserDefaults.standard.string(forKey: "lastAutoSaveDay")
-    guard UserDefaults.standard.object(forKey: "dailyAutoSaveOff") == nil,
-          last != today else { return }
-    guard qspaceRunning() else {
-        logLine("dailyAutoSave: QSpace 未运行，跳过")
-        return
-    }
-    UserDefaults.standard.set(today, forKey: "lastAutoSaveDay")
-    saveLayout(named: "", isAuto: true)
-    pruneAutoSnapshots()
-    logLine("dailyAutoSave: 已保存今日快照")
 }
 
 // MARK: - 合盖/开盖绑定应用
@@ -338,13 +401,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
                 applyBoundLayout(kind: "wake", restart: true)
-                dailyAutoSave()
+                monitorLayoutChanges()
             }
         }
-        // 每日自动保存：启动 60 秒后查一次，之后每 30 分钟查（跨天即存）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { dailyAutoSave() }
-        let t = Timer.scheduledTimer(withTimeInterval: 1800, repeats: true) { _ in
-            dailyAutoSave()
+        // 时光机监测：启动 20 秒先跑一次，之后每 30 分钟
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { monitorLayoutChanges() }
+        let t = Timer.scheduledTimer(withTimeInterval: monitorIntervalSec, repeats: true) { _ in
+            monitorLayoutChanges()
         }
         RunLoop.main.add(t, forMode: .common)
 
@@ -472,11 +535,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         loginIt.state = loginItemEnabled() ? .on : .off
         menu.addItem(loginIt)
 
-        let dailyOn = UserDefaults.standard.object(forKey: "dailyAutoSaveOff") == nil
-        let dailyIt = NSMenuItem(title: "🕐 每日自动保存（保留最近 5 个）", action: #selector(toggleDaily(_:)), keyEquivalent: "")
-        dailyIt.target = self
-        dailyIt.state = dailyOn ? .on : .off
-        menu.addItem(dailyIt)
+        let monitorIt = NSMenuItem(title: "⏱ 时光机监测（每 30 分钟）", action: #selector(toggleMonitor(_:)), keyEquivalent: "")
+        monitorIt.target = self
+        monitorIt.state = autoMonitorOn ? .on : .off
+        menu.addItem(monitorIt)
+
+        let nowIt = NSMenuItem(title: "⏱ 立即监测一次", action: #selector(monitorNow(_:)), keyEquivalent: "")
+        nowIt.target = self
+        menu.addItem(nowIt)
 
         menu.addItem(.separator())
         let quitIt = NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -535,10 +601,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setLoginItem(!loginItemEnabled())
     }
 
-    @objc func toggleDaily(_ sender: NSMenuItem) {
-        let off = UserDefaults.standard.bool(forKey: "dailyAutoSaveOff")
-        UserDefaults.standard.set(!off, forKey: "dailyAutoSaveOff")
+    @objc func toggleMonitor(_ sender: NSMenuItem) {
+        autoMonitorOn.toggle()
+        UserDefaults.standard.set(!autoMonitorOn, forKey: "autoMonitorOff")
         rebuildMenu()
+    }
+
+    @objc func monitorNow(_ sender: NSMenuItem) {
+        monitorLayoutChanges()
     }
 
     @objc func bindClicked(_ sender: NSMenuItem) {
