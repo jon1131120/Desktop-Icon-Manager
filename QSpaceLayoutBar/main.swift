@@ -498,27 +498,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(it)
         }
 
-        // 自动备份区（子菜单：应用快照）
+        // 自动备份区（直接点击快照名即应用——本来就是二级菜单，一步到位）
         let autos = layoutURLs().filter {
             guard let d = FileManager.default.contents(atPath: $0.path),
                   let s = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return false }
             return (s["isAuto"] as? Bool) == true
         }
         if !autos.isEmpty {
-            let head = NSMenuItem(title: "🤖 自动备份（最近 \(autos.count) 个）", action: nil, keyEquivalent: "")
+            let head = NSMenuItem(title: "🤖 自动备份（最近 \(autos.count) 个，点击即应用）", action: nil, keyEquivalent: "")
             let sub = NSMenu()
             for url in autos {
                 guard let d = FileManager.default.contents(atPath: url.path),
                       let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
                 let name = snap["name"] as? String ?? "自动"
-                let it = NSMenuItem(title: name, action: nil, keyEquivalent: "")
+                let it = NSMenuItem(title: name, action: #selector(restoreClicked(_:)), keyEquivalent: "")
+                it.target = self
+                it.representedObject = url.path
                 if name == currentLayoutName { it.state = .on }
-
-                let applySub = NSMenu()
-                let ap = NSMenuItem(title: "⭐ 应用这个快照", action: #selector(restoreClicked(_:)), keyEquivalent: "")
-                ap.target = self; ap.representedObject = url.path
-                applySub.addItem(ap)
-                it.submenu = applySub
                 sub.addItem(it)
             }
             head.submenu = sub
