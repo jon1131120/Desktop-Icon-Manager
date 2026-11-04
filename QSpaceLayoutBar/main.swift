@@ -945,7 +945,6 @@ func hubPost(_ path: String = hubLayoutPath, body: [String: Any]) -> [String: An
 // MARK: - 布局自动同步引擎（中枢模式：三台对等，后改赢）
 let syncStatePath = NSString(string: "~/qspace-layouts/sync-state.json").expandingTildeInPath
 var autoSyncOn = UserDefaults.standard.object(forKey: "autoSyncOff") == nil
-var syncState: [String: Any] = [:]
 let syncQueue = DispatchQueue(label: "qslb.sync")
 
 func loadSyncState() -> [String: Any] {
@@ -976,7 +975,7 @@ func broadcastIfNeeded() {
     var st = loadSyncState()
     // ⭐ 吸收期（应用远端 + QSpace 重启重排期间）：把当前指纹持续记为"已知"，绝不上报。
     //    否则 QSpace 排完盘产生的指纹变化会被当成用户拖动 → 覆盖中枢 → 其他机器再应用 → 死循环
-    let supUntil = max(suppressUntil, st["suppressBroadcastUntil"] as? Int ?? 0)
+    let supUntil = max(rt.suppressUntil, st["suppressBroadcastUntil"] as? Int ?? 0)
     if now < supUntil {
         if fp != (st["baselineFingerprint"] as? String ?? "") {
             st["baselineFingerprint"] = fp
@@ -990,9 +989,9 @@ func broadcastIfNeeded() {
 
     // ① 只在指纹「真正变化的那一刻」刷新计时：连续拖动时每次变化都重置，停手满 10 秒才上报。
     //    绝不能每轮无条件刷新（fp 会持续 != baseline，那样永远等不到 10 秒，实测导致永不同步）
-    if fp != lastSeenFp {
-        lastSeenFp = fp
-        if now - specChangedAt >= 20 { lastLocalChangeAt = now }   // 切套冷静期内的变化不算用户拖动
+    if fp != rt.lastSeenFp {
+        rt.lastSeenFp = fp
+        if now - specChangedAt >= 20 { rt.lastLocalChangeAt = now }   // 切套冷静期内的变化不算用户拖动
     }
 
     if fp == baseline { return }
@@ -1003,7 +1002,7 @@ func broadcastIfNeeded() {
     if now - specChangedAt < 20 { return }
 
     // ③ 拖动防抖：停手不足 10 秒先不上报
-    if now - lastLocalChangeAt < 10 { return }
+    if now - rt.lastLocalChangeAt < 10 { return }
 
     // ④ 刚应用过远端，给 15 秒忽略期
     if now - (st["lastAppliedAt"] as? Int ?? 0) < 15 { return }
@@ -1099,7 +1098,7 @@ func applyRemoteIfNewer(_ remote: [String: Any]) {
     let now = Int(Date().timeIntervalSince1970)
     // 本机刚拖完（防抖期内）且中枢版本与本地不同 → 先不应用，等本地上报完
     // 否则会把用户刚拖的图标挪回旧位置（实测 moved=2 把刚拖的 2 个图标弹回去）
-    if !forceApplyOnce && now - lastLocalChangeAt < 10 {
+    if !forceApplyOnce && now - rt.lastLocalChangeAt < 10 {
         if let c0 = loadConf(), let l0 = makeGridSnapshot(conf: c0),
            (l0["layoutFingerprint"] as? String) != fp {
             logLine("sync: 本机刚改动，暂不应用远端（等本地上报）")
@@ -1122,15 +1121,14 @@ func applyRemoteIfNewer(_ remote: [String: Any]) {
     applyRemote(remote, fp: fp, file: "hub")
 }
 
-var applyingRemote = false
 
 func applyRemote(_ snap: [String: Any], fp: String, file: String) {
-    guard !applyingRemote else { return }
+    guard !rt.applyingRemote else { return }
     guard let conf = loadConf(), let r = applyGridSnapshot(snap, to: conf) else {
         logLine("sync: 应用失败（applyGridSnapshot 返回 nil）")
         return
     }
-    applyingRemote = true
+    rt.applyingRemote = true
     appDelegate?.setBusy(true)
     let src = snap["sourceMachine"] as? String ?? file
     var dstKey = "?"
@@ -1147,14 +1145,14 @@ func applyRemote(_ snap: [String: Any], fp: String, file: String) {
     st["lastAppliedAt"] = Int(Date().timeIntervalSince1970)
     let absorb = Int(Date().timeIntervalSince1970) + 60
     st["suppressBroadcastUntil"] = absorb
-    suppressUntil = absorb
+    rt.suppressUntil = absorb
     st["lastVerify"] = ["ok": v.ok, "checked": v.checked, "bad": v.bad, "total": v.total,
                         "at": Int(Date().timeIntervalSince1970), "source": src]
     if let c2 = loadConf(), let s2 = makeGridSnapshot(conf: c2) {
         st["baselineFingerprint"] = s2["layoutFingerprint"] as? String ?? ""
     }
     saveSyncState(st)
-    applyingRemote = false
+    rt.applyingRemote = false
     appDelegate?.setBusy(false)
     appDelegate?.rebuildMenu()
     notifyUnique("sync:\(src)", v.ok
@@ -1199,19 +1197,18 @@ func verifyAfterApply(_ snap: [String: Any]) -> (ok: Bool, checked: Int, bad: In
 }
 
 /// 屏幕状态（开合盖/切屏）变化 → 用新套参数强制重应用中枢最新布局
-var lastSpecKey = ""
 
 func checkSpecChange() {
     guard let conf = loadConf(), let attrs = conf["itemAttrs"] as? [[String: Any]],
           let ctx = localGridContext(attrs: attrs) else { return }
     let key = ctx.spec.key
-    if lastSpecKey.isEmpty { lastSpecKey = key; return }
-    if key != lastSpecKey {
-        logLine("sync: 屏幕切换 \(lastSpecKey) → \(key)，冷静 20 秒并用新套强制重应用")
-        lastSpecKey = key
+    if rt.lastSpecKey.isEmpty { rt.lastSpecKey = key; return }
+    if key != rt.lastSpecKey {
+        logLine("sync: 屏幕切换 \(rt.lastSpecKey) → \(key)，冷静 20 秒并用新套强制重应用")
+        rt.lastSpecKey = key
         specChangedAt = Int(Date().timeIntervalSince1970)
         forceApplyOnce = true
-        suppressUntil = 0
+        rt.suppressUntil = 0
         var st = loadSyncState()
         st.removeValue(forKey: "lastAppliedFingerprint")
         st.removeValue(forKey: "lastAppliedAt")
@@ -1227,13 +1224,47 @@ func checkSpecChange() {
 }
 
 // 防抖 / 冷静期 / 重试状态
-var lastLocalChangeAt = 0      // 本机布局最后变化时刻（只在 fp 真正变化时刷新）
-var lastSeenFp = ""            // 上一轮看到的本机指纹（用于判断"这一刻变了"）
 var specChangedAt = 0          // 屏幕/套切换时刻（冷静期内不上报，防止污染中枢）
 var forceApplyOnce = false     // 切套后强制重应用一次（跨套像素不同，不能靠指纹跳过）
 var hubFailStreak = 0          // 中枢连续失败次数
 var hubNextRetryAt = 0         // 下次允许重试的时刻（指数退避）
-var suppressUntil = 0          // 吸收期截止时刻：应用远端后 QSpace 会自行重排，期间只吸收不上报
+// 同步运行时状态：被 syncQueue(后台) 与主线程同时读写 → 收敛到一个带锁的容器里
+final class SyncRuntime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _suppressUntil = 0        // 吸收期截止时刻
+    private var _lastLocalChangeAt = 0     // 本机最后变化时刻
+    private var _lastSeenFp = ""           // 上一轮看到的本机指纹
+    private var _lastSpecKey = ""          // 当前套
+    private var _applyingRemote = false    // 防重入
+    private var _syncState: [String: Any] = [:]
+
+    var suppressUntil: Int {
+        get { lock.lock(); defer { lock.unlock() }; return _suppressUntil }
+        set { lock.lock(); _suppressUntil = newValue; lock.unlock() }
+    }
+    var lastLocalChangeAt: Int {
+        get { lock.lock(); defer { lock.unlock() }; return _lastLocalChangeAt }
+        set { lock.lock(); _lastLocalChangeAt = newValue; lock.unlock() }
+    }
+    var lastSeenFp: String {
+        get { lock.lock(); defer { lock.unlock() }; return _lastSeenFp }
+        set { lock.lock(); _lastSeenFp = newValue; lock.unlock() }
+    }
+    var lastSpecKey: String {
+        get { lock.lock(); defer { lock.unlock() }; return _lastSpecKey }
+        set { lock.lock(); _lastSpecKey = newValue; lock.unlock() }
+    }
+    var applyingRemote: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _applyingRemote }
+        set { lock.lock(); _applyingRemote = newValue; lock.unlock() }
+    }
+    var syncState: [String: Any] {
+        get { lock.lock(); defer { lock.unlock() }; return _syncState }
+        set { lock.lock(); _syncState = newValue; lock.unlock() }
+    }
+}
+let rt = SyncRuntime()
+
 
 func runSyncCycle() {
     syncQueue.async {
@@ -1293,12 +1324,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // 布局自动同步：每 3 秒一轮（广播本机 + 拉取其他机器）
-        syncState = loadSyncState()
+        rt.syncState = loadSyncState()
         // 启动基线：把当前指纹直接记为"已见"，避免首轮把自身当成"用户刚改动"
         if let c0 = loadConf(), let s0 = makeGridSnapshot(conf: c0) {
-            lastSeenFp = s0["layoutFingerprint"] as? String ?? ""
+            rt.lastSeenFp = s0["layoutFingerprint"] as? String ?? ""
         }
-        lastLocalChangeAt = 0
+        rt.lastLocalChangeAt = 0
         let syncT = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in runSyncCycle() }
         RunLoop.main.add(syncT, forMode: .common)
 
@@ -1329,34 +1360,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func buildBindMenu(kind: String, current: String) -> NSMenu {
-        let sub = NSMenu()
-        let none = NSMenuItem(title: "不绑定", action: #selector(bindClicked(_:)), keyEquivalent: "")
-        none.target = self
-        none.representedObject = ["kind": kind, "name": ""]
-        if current == "未绑定" { none.state = .on }
-        sub.addItem(none)
-        sub.addItem(.separator())
-        var bound = 0
-        for url in layoutURLs() {
-            guard let d = FileManager.default.contents(atPath: url.path),
-                  let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-                  let name = snap["name"] as? String else { continue }
-            guard name.hasPrefix(machinePrefix) else { continue }  // 合盖/开盖绑定只认本机方案（别机坐标恢复会错位）
-            let it = NSMenuItem(title: name, action: #selector(bindClicked(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = ["kind": kind, "name": name]
-            if name == current { it.state = .on }
-            sub.addItem(it)
-            bound += 1
-        }
-        if bound == 0 {
-            let hint = NSMenuItem(title: "（暂无可绑定的方案）", action: nil, keyEquivalent: "")
-            hint.isEnabled = false
-            sub.addItem(hint)
-        }
-        return sub
-    }
 
     func rebuildMenu() {
         if statusItem == nil {
@@ -1454,11 +1457,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(!autoSyncOn, forKey: "autoSyncOff")
         logLine("sync: 自动同步 \(autoSyncOn ? "开" : "关")")
         rebuildMenu()
-        if autoSyncOn { syncState = loadSyncState(); runSyncCycle() }
+        if autoSyncOn { rt.syncState = loadSyncState(); runSyncCycle() }
     }
 
     @objc func syncNowClicked(_ sender: NSMenuItem) {
-        syncState = loadSyncState()
+        rt.syncState = loadSyncState()
         runSyncCycle()
         notify("已触发一次同步（8 秒内完成）")
     }
@@ -1579,9 +1582,9 @@ if CommandLine.arguments.contains("--selftest") {
 
 // 拉取调试：--pulldebug 打印中枢当前布局的解析/应用结果
 if CommandLine.arguments.contains("--pulldebug") {
-    syncState = loadSyncState()
+    rt.syncState = loadSyncState()
     print("machineTag=\(machineTag) hub=\(hubCandidates.joined(separator: " -> "))")
-    print("state:", syncState)
+    print("state:", rt.syncState)
     guard let snap = hubGet(), !snap.isEmpty else {
         print("中枢无布局"); exit(1)
     }
