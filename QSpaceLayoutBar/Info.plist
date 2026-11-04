@@ -18,6 +18,12 @@
     <string>APPL</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>需要连接局域网或 ZeroTier 上的布局同步中枢，用于三台 Mac 桌面图标布局同步。</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_qspace-hub._tcp</string>
+    </array>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHumanReadableCopyright</key>

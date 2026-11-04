@@ -289,53 +289,8 @@ func changeRatio(between a: [[String: Any]], and b: [[String: Any]]) -> Double {
 
 /// 时光机监测：三规则 + 防冗余，决定是否自动存一条新快照
 func monitorLayoutChanges() {
-    guard autoMonitorOn else {
-        logLine("monitor: off, skip")
-        return
-    }
-    guard let conf = loadConf(), let cur = conf["itemAttrs"] as? [[String: Any]] else {
-        logLine("monitor: conf unreadable, skip")
-        return
-    }
-
-    var maxRatioToAny = 0.0        // 规则②：与所有已知条目的最大差异
-    var lastAutoAttrs: [[String: Any]]?
-    var lastAutoMtime = Date.distantPast
-
-    for url in layoutURLs() {
-        guard let d = FileManager.default.contents(atPath: url.path),
-              let s = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              let attrs = s["itemAttrs"] as? [[String: Any]] else { continue }
-        // 跨机共享目录：监测/锚点/最近自动快照只统计本机条目（别机布局分辨率不同，永远大差异会误触发存档）
-        guard (s["name"] as? String)?.hasPrefix(machinePrefix) == true else { continue }
-        let r = changeRatio(between: cur, and: attrs)
-        maxRatioToAny = max(maxRatioToAny, r)
-        let isAuto = (s["isAuto"] as? Bool) == true
-        if isAuto {
-            let mt = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            if mt > lastAutoMtime {
-                lastAutoMtime = mt
-                lastAutoAttrs = attrs
-            }
-        }
-    }
-
-    let ratioToLastAuto = lastAutoAttrs != nil ? changeRatio(between: cur, and: lastAutoAttrs!) : 1.0
-    let hoursSince = Date().timeIntervalSince(lastAutoMtime) / 3600.0
-    let rule1 = ratioToLastAuto >= changeThreshold                       // 漂移检测：相对上一条大改
-    let rule2 = maxRatioToAny >= changeThreshold                         // 离锚检测：偏离所有手动方案锚点
-    let rule3 = hoursSince >= minHoursBetweenSnapshots && ratioToLastAuto > 0  // 保底：每天至少一条
-    // 防冗余只对比最近一条自动快照，且只压制大改触发；24h 保底不受冗余限制（每天至少一个还原点的承诺）
-    let redundant = lastAutoAttrs != nil && ratioToLastAuto < redundantThreshold
-    let shouldSave = (rule1 || rule2) && !redundant || rule3
-
-    logLine("monitor: R1(\(rule1)) R2(\(rule2)) R3(\(rule3)) redundant(\(redundant)) -> save=\(shouldSave) lastAuto=\(Int(ratioToLastAuto * 100))% maxAny=\(Int(maxRatioToAny * 100))%")
-
-    if shouldSave {
-        saveLayout(named: "", isAuto: true)
-        pruneAutoSnapshots()
-        notify("⏱ 检测到布局大改（\(Int(ratioToLastAuto * 100))%），已自动存档")
-    }
+    // 已废弃：自动存档属旧「分电脑快照」体系，改为只在手动保存时存档
+    return
 }
 
 func restoreLayout(at url: URL, restart: Bool = true) {
@@ -406,29 +361,8 @@ func restoreLayout(at url: URL, restart: Bool = true) {
 }
 
 func autoSwitchIfNeeded() {
-    guard autoSwitchOn else {
-        logLine("autoSwitch: off, skip")
-        return
-    }
-    let fp = currentFingerprint()
-    logLine("autoSwitch: fp=\(fp), current=\(currentLayoutName)")
-    refreshLayoutsAsync()  // 顺带后台刷新共享目录（不阻塞本次匹配，新同步来的快照下一轮生效）
-    for url in layoutURLs() {
-        guard let d = FileManager.default.contents(atPath: url.path),
-              let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              (snap["fingerprint"] as? String) == fp else { continue }
-        let name = snap["name"] as? String ?? ""
-        if name != currentLayoutName {
-            logLine("autoSwitch: matched「\(name)」-> restoring")
-            restoreLayout(at: url)
-        } else {
-            logLine("autoSwitch: matched「\(name)」== current, no-op")
-        }
-        return
-    }
-    logLine("autoSwitch: no layout matched fp=\(fp)")
-    currentLayoutName = "（未匹配）"
-    appDelegate?.rebuildMenu()
+    // 已废弃：分电脑快照自动切换已由「中枢统一布局 + 屏幕切套」取代
+    return
 }
 
 // MARK: - 微拖拽纠错（恢复重启后模拟 1px 拖拽，触发 QSpace snapToGrid 自动对齐）
@@ -485,12 +419,8 @@ func microNudge(conf: [String: Any]) {
 // MARK: - 合盖/开盖绑定应用
 
 func applyBoundLayout(kind: String, restart: Bool) {
-    guard let name = UserDefaults.standard.string(forKey: kind == "sleep" ? "sleepLayout" : "wakeLayout"),
-          !name.isEmpty else { return }
-    let url = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(name).json")
-    if FileManager.default.fileExists(atPath: url.path) {
-        restoreLayout(at: url, restart: restart)
-    }
+    // 已废弃：合盖/开盖绑定快照已由「自动识别当前套(A/B/C)」取代
+    return
 }
 
 // MARK: - 开机自启（launchd agent，不依赖签名身份）
@@ -551,6 +481,8 @@ func subprocessOutput(_ args: [String]) -> String {
 //   3. 中间的图标 → 按两侧宽度差线性均摊
 //   4. 行：组件行带内、且非右锚段的图标跟着组件高度差平移（A/B 行5-7 ↔ C 行4-6）
 //   5. 落点撞禁区（组件区 + 自定义禁区）→ 同行向右推、行末向下推，永不落禁区
+// 三套屏幕参数（写死：每套 = 网格 + 禁区 + 像素原点/步长 + QSpace 显示设置）
+// 2026-11-04 实测定稿：A=Air 内置，B=MBP 内置，C=外接屏/Studio（2560×1440）
 struct GridSpec {
     let key: String
     let cols: Int
@@ -560,12 +492,29 @@ struct GridSpec {
     let armRight: Int       // 下排组件右缘列
     let zone2: (Int, Int)   // 组件行带（行区间）
     let floorStart: Int     // 地板起始行
+    // 固定像素参数（实测）
+    let x0: Double
+    let y0: Double
+    let colStep: Double
+    let rowStep: Double
+    // 固定 QSpace 显示设置（每套屏幕专用）
+    let lod: Int
+    let hSp: Int
+    let font: Int
 }
 
-let SPEC_A = GridSpec(key: "A", cols: 21, rows: 9, topRight: 9, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8)
-let SPEC_B = GridSpec(key: "B", cols: 19, rows: 9, topRight: 8, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8)
-let SPEC_C = GridSpec(key: "C", cols: 22, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7)
+let SPEC_A = GridSpec(key: "A", cols: 21, rows: 9, topRight: 9, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
+                       x0: 80, y0: 44, colStep: 79, rowStep: 114, lod: 64, hSp: 11, font: 11)
+let SPEC_B = GridSpec(key: "B", cols: 19, rows: 9, topRight: 8, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
+                       x0: 53, y0: 43, colStep: 90, rowStep: 114, lod: 64, hSp: 22, font: 11)
+let SPEC_C = GridSpec(key: "C", cols: 22, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7,
+                       x0: 120, y0: 40, colStep: 113, rowStep: 148, lod: 96, hSp: 11, font: 11)
 let SPEC_ALL: [String: GridSpec] = ["A": SPEC_A, "B": SPEC_B, "C": SPEC_C]
+
+/// 该套对应的 QSpace 显示设置（应用布局时一起写，保证参数随屏切换）
+func specSettings(_ s: GridSpec) -> [String: Any] {
+    ["lod": s.lod, "itemHSpacing": s.hSp, "itemVSpacing": 0, "fontSize": s.font]
+}
 
 // 杰哥 2026-11-04 追加的自定义禁区（列,行）
 let customBlocked: [String: [(Int, Int)]] = [
@@ -721,7 +670,9 @@ func specForSize(_ w: Int, _ h: Int) -> GridSpec? {
 
 /// 本机当前网格角色：目标屏（多屏取外接）+ 对应 spec
 func localGridContext(attrs: [[String: Any]]) -> (screen: ScreenGroup, spec: GridSpec)? {
-    guard let g = screenGroups(attrs).first else { return nil }
+    // 选「实际承载图标最多」的屏：开盖时图标在内屏 → B 套；合盖只剩外接 → C 套
+    // （不能按面积/最宽选，否则双屏态会错用外接参数把内屏图标挤溢出）
+    guard let g = screenGroups(attrs).max(by: { $0.count < $1.count }) else { return nil }
     if let s = specForSize(g.width, g.height) { return (g, s) }
     switch machineTag {
     case "Air": return (g, SPEC_A)
@@ -772,10 +723,11 @@ func calibrateGrid(_ attrs: [[String: Any]], screenId: String) -> (x0: Double, y
 }
 
 /// 生成网格化快照（v2）：只收目标屏图标（单屏机器：所有图标归一，忽略历史 screen 编号）
+/// 用写死的 spec 参数换算（不再从坐标反推，消除步长误差）
 func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
     guard let attrs = conf["itemAttrs"] as? [[String: Any]],
-          let ctx = localGridContext(attrs: attrs),
-          let cal = calibrateGrid(attrs, screenId: ctx.screen.screenId) else { return nil }
+          let ctx = localGridContext(attrs: attrs) else { return nil }
+    let spec = ctx.spec
     let singleScreen = isSingleScreenConf(attrs)
     var gridItems: [[String: Any]] = []
     for it in attrs {
@@ -785,11 +737,11 @@ func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
               let name = it["name"] as? String,
               let x = (it["x"] as? NSNumber)?.doubleValue,
               let y = (it["y"] as? NSNumber)?.doubleValue else { continue }
-        let col = Int(((x - cal.x0) / cal.stepX).rounded()) + 1
-        let row = Int(((y - cal.y0) / cal.stepY).rounded()) + 1
+        let col = Int(((x - spec.x0) / spec.colStep).rounded()) + 1
+        let row = Int(((y - spec.y0) / spec.rowStep).rounded()) + 1
         gridItems.append(["name": name,
-                          "col": max(1, min(ctx.spec.cols, col)),
-                          "row": max(1, min(ctx.spec.rows, row))])
+                          "col": max(1, min(spec.cols, col)),
+                          "row": max(1, min(spec.rows, row))])
     }
     let fpStr = gridItems
         .sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
@@ -802,8 +754,8 @@ func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
         "specKey": ctx.spec.key,
         "screenId": ctx.screen.screenId,
         "screenSize": "\(ctx.screen.width)x\(ctx.screen.height)",
-        "grid": ["cols": ctx.spec.cols, "rows": ctx.spec.rows,
-                 "x0": cal.x0, "y0": cal.y0, "colStep": cal.stepX, "rowStep": cal.stepY],
+        "grid": ["cols": spec.cols, "rows": spec.rows,
+                 "x0": spec.x0, "y0": spec.y0, "colStep": spec.colStep, "rowStep": spec.rowStep],
         "items": gridItems,
         "layoutFingerprint": fnv1a(fpStr),
         "syncAt": Int(Date().timeIntervalSince1970),
@@ -818,7 +770,6 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
     guard let srcKey = snap["specKey"] as? String, let src = SPEC_ALL[srcKey],
           let attrs = conf["itemAttrs"] as? [[String: Any]],
           let ctx = localGridContext(attrs: attrs),
-          let cal = calibrateGrid(attrs, screenId: ctx.screen.screenId),
           let gridItems = snap["items"] as? [[String: Any]] else { return nil }
     let dst = ctx.spec
     let singleScreen = isSingleScreenConf(attrs)
@@ -848,8 +799,8 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
         if singleScreen { ni["screen"] = localScreenMode }
         let ox = (it["x"] as? NSNumber)?.intValue ?? -1
         let oy = (it["y"] as? NSNumber)?.intValue ?? -1
-        let oc = ox >= 0 ? Int(((Double(ox) - cal.x0) / cal.stepX).rounded()) + 1 : -1
-        let orow = oy >= 0 ? Int(((Double(oy) - cal.y0) / cal.stepY).rounded()) + 1 : -1
+        let oc = ox >= 0 ? Int(((Double(ox) - dst.x0) / dst.colStep).rounded()) + 1 : -1
+        let orow = oy >= 0 ? Int(((Double(oy) - dst.y0) / dst.rowStep).rounded()) + 1 : -1
         var (dc, dr) = mapCell(from: src, to: dst, col: c, row: r)
         if ox >= 0 && oc == dc && orow == dr {
             // 原格 == 计算格：原位不动（自定义禁区标定误差不应推移既有图标）
@@ -867,8 +818,8 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
             }
             if dr <= dst.rows {
                 used.insert("\(dc),\(dr)")
-                let nx = Int((cal.x0 + Double(dc - 1) * cal.stepX).rounded())
-                let ny = Int((cal.y0 + Double(dr - 1) * cal.stepY).rounded())
+                let nx = Int((dst.x0 + Double(dc - 1) * dst.colStep).rounded())
+                let ny = Int((dst.y0 + Double(dr - 1) * dst.rowStep).rounded())
                 ni["x"] = nx; ni["y"] = ny
                 if oc != dc || orow != dr {
                     moved += 1
@@ -883,85 +834,96 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
     }
     var nc = conf
     nc["itemAttrs"] = out
-    // 注意：不应用 desktopSettings —— 图标大小/行列间距各机自适配（lod 96 vs 64），跨机套用会显示错乱
+    // 参数随套应用：目标屏该用哪套就写哪套（开合盖自动切换，根治"合盖设置套到内屏溢出"）
+    for (k, v) in specSettings(dst) { nc[k] = v }
     return (nc, matched, kept, moved)
 }
 
-// MARK: - 布局自动同步引擎（iCloud 通道；防循环四闸：基线比对 / 忽略期 / 单写者 / 指纹去重 + 风暴保护）
-let syncDir = layoutDir + "/sync"
-let syncInbox = NSString(string: "~/qspace-layouts/sync-inbox").expandingTildeInPath   // SSH 直推的本地落点（加速通道）
+// MARK: - 布局同步中枢客户端（MINIPC 常开，HTTP 18878）
+// 地址优先级：局域网 → ZeroTier（MBP/Air 带出门时只走 ZT，自动回退）
+// 直连 HTTP：首次访问会由系统弹「允许访问本地网络」窗口（无需进系统设置手动开）
+let hubCandidates = [
+    "http://192.168.113.11:18878",   // 局域网（MINIPC 有线）
+    "http://192.168.191.9:18878"     // ZeroTier（异地/带出门）
+]
+let hubLayoutPath = "/layout"
+let hubLock = NSLock()
+var hubActiveBase: String? = nil
+
+func hubBases() -> [String] {
+    hubLock.lock(); defer { hubLock.unlock() }
+    guard let active = hubActiveBase else { return hubCandidates }
+    return [active] + hubCandidates.filter { $0 != active }
+}
+
+func markHubBase(_ base: String) {
+    hubLock.lock()
+    let changed = (hubActiveBase != base)
+    hubActiveBase = base
+    hubLock.unlock()
+    if changed { logLine("hub: 使用地址 \(base)") }
+}
+
+func httpGetJSON(_ urlStr: String, timeout: TimeInterval = 3) -> [String: Any]? {
+    guard let u = URL(string: urlStr) else { return nil }
+    var req = URLRequest(url: u, timeoutInterval: timeout)
+    req.httpMethod = "GET"
+    let sem = DispatchSemaphore(value: 0)
+    var result: [String: Any]?
+    URLSession.shared.dataTask(with: req) { data, _, _ in
+        if let d = data, let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] { result = o }
+        sem.signal()
+    }.resume()
+    _ = sem.wait(timeout: .now() + timeout + 2)
+    return result
+}
+
+func httpPostJSON(_ urlStr: String, body: [String: Any], timeout: TimeInterval = 3) -> [String: Any]? {
+    guard let u = URL(string: urlStr),
+          let bd = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+    var req = URLRequest(url: u, timeoutInterval: timeout)
+    req.httpMethod = "POST"
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    req.httpBody = bd
+    let sem = DispatchSemaphore(value: 0)
+    var result: [String: Any]?
+    URLSession.shared.dataTask(with: req) { data, _, _ in
+        if let d = data, let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] { result = o }
+        sem.signal()
+    }.resume()
+    _ = sem.wait(timeout: .now() + timeout + 2)
+    return result
+}
+
+/// 从中枢拉取（LAN 失败自动切 ZT）
+func hubGet(_ path: String = hubLayoutPath) -> [String: Any]? {
+    let bases = hubBases()
+    for base in bases {
+        if let o = httpGetJSON(base + path) {
+            markHubBase(base)
+            return o
+        }
+    }
+    if bases.count > 1 { logLine("hub: 所有地址均不可达（LAN + ZT）") }
+    return nil
+}
+
+/// 上报中枢（LAN 失败自动切 ZT）
+func hubPost(_ path: String = hubLayoutPath, body: [String: Any]) -> [String: Any]? {
+    let bases = hubBases()
+    for base in bases {
+        if let o = httpPostJSON(base + path, body: body) {
+            markHubBase(base)
+            return o
+        }
+    }
+    if bases.count > 1 { logLine("hub: 上报失败（LAN + ZT 均不可达）") }
+    return nil
+}
+
+// MARK: - 布局自动同步引擎（中枢模式：三台对等，后改赢）
 let syncStatePath = NSString(string: "~/qspace-layouts/sync-state.json").expandingTildeInPath
-// SSH 直推目标（按本机可用密钥；失败静默，靠 iCloud 兜底）
-let pushTargets: [String] = {
-    switch machineTag {
-    case "MBP": return ["air", "studio"]
-    case "Air": return ["mbp"]          // Air→Studio 无密钥，靠 iCloud
-    case "Studio": return ["mbp", "air"]
-    default: return []
-    }
-}()
-
-func pushToPeers(_ localPath: String) {
-    for t in pushTargets {
-        DispatchQueue.global(qos: .utility).async {
-            // 不用 subprocessOutput（它内部 shell 拼接，路径空格会被拆散）——直接 Process 参数数组
-            // 目标文件名无空格（tag-sync.json），避免远端 scp 路径空格问题
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
-            p.arguments = ["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
-                           localPath, "\(t):qspace-layouts/sync-inbox/\(machineTag)-sync.json"]
-            let pipe = Pipe()
-            p.standardError = pipe
-            p.standardOutput = pipe
-            do {
-                try p.run()
-                p.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let err = String(data: data, encoding: .utf8) ?? ""
-                logLine("push: \(t) rc=\(p.terminationStatus)\(err.isEmpty ? "" : " \(String(err.prefix(150)))")")
-            } catch {
-                logLine("push: \(t) 启动失败 \(error)")
-            }
-        }
-    }
-}
-
-/// 主动拉取对端 inbox（解决"对方推不过来"的方向性密钥缺失：Studio→Air 有密钥，Air→Studio 没有）
-let pullPeers: [(alias: String, tag: String)] = {
-    switch machineTag {
-    case "MBP": return [("air", "Air")]       // MBP 也能从 Air 拉（推的补充）
-    case "Studio": return [("air", "Air")]    // Studio 主动拉 Air（关键：Air 推不到 Studio）
-    default: return []                         // Air 是权威源，只推不拉
-    }
-}()
-
-func pullFromPeers() {
-    let dir = syncInbox
-    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    for peer in pullPeers {
-        DispatchQueue.global(qos: .utility).async {
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
-            p.arguments = ["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
-                           "\(peer.alias):qspace-layouts/sync-inbox/\(peer.tag)-sync.json", dir + "/"]
-            let pipe = Pipe()
-            p.standardError = pipe
-            p.standardOutput = pipe
-            do {
-                try p.run()
-                p.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let err = String(data: data, encoding: .utf8) ?? ""
-                logLine("pull-from: \(peer.alias) rc=\(p.terminationStatus)\(err.isEmpty ? "" : " \(String(err.prefix(150)))")")
-            } catch {
-                logLine("pull-from: \(peer.alias) 启动失败 \(error)")
-            }
-        }
-    }
-}
 var autoSyncOn = UserDefaults.standard.object(forKey: "autoSyncOff") == nil
-// 权威机模式：设置后只有该机广播，其余机器只接收不广播（空 = 双向）
-var authorityMachine: String = UserDefaults.standard.string(forKey: "authorityMachine") ?? ""
 var syncState: [String: Any] = [:]
 let syncQueue = DispatchQueue(label: "qslb.sync")
 
@@ -979,123 +941,97 @@ func saveSyncState(_ s: [String: Any]) {
     }
 }
 
-/// 广播本机布局（单写者：只写 [机名] sync.json；内容不变/忽略期/风暴保护时自动闭嘴）
+/// 上报本机布局到中枢（后改赢；被拒说明中枢有更新的版本，下一轮拉取）
 func broadcastIfNeeded() {
     guard autoSyncOn else { return }
-    // 权威机模式：非权威机只接收不广播（第一版以 Air 为准）
-    if !authorityMachine.isEmpty && authorityMachine != machineTag { return }
     guard let conf = loadConf(), var snap = makeGridSnapshot(conf: conf) else { return }
     let fp = snap["layoutFingerprint"] as? String ?? ""
     guard !fp.isEmpty else { return }
     let now = Int(Date().timeIntervalSince1970)
     var st = loadSyncState()
-    if fp == (st["baselineFingerprint"] as? String) { return }                 // 闸① 基线比对
-    if fp == (st["lastBroadcastFingerprint"] as? String) {
-        st["baselineFingerprint"] = fp; syncState = st; saveSyncState(st); return
-    }
-    if now - (st["lastAppliedAt"] as? Int ?? 0) < 60 { return }                // 闸② 忽略期
+    if fp == (st["baselineFingerprint"] as? String) { return }                 // 闸① 基线
+    if fp == (st["lastBroadcastFingerprint"] as? String) { return }            // 内容没变
+    if now - (st["lastAppliedAt"] as? Int ?? 0) < 15 { return }                // 闸② 忽略期（应用后 15 秒）
     let recent = (st["recentBroadcasts"] as? [Int] ?? []).filter { now - $0 < 60 }
-    if recent.count >= 6 { logLine("sync: 风暴保护，暂停广播"); return }        // 风暴保护
-    if let last = recent.last, now - last < 4 { return }                        // 节流 4s
-    snap.removeValue(forKey: "desktopSettings")                                 // 不带设置（各机自适配）
+    if recent.count >= 8 { logLine("sync: 风暴保护，暂停上报"); return }
+    if let last = recent.last, now - last < 2 { return }                        // 节流 2 秒
     snap["syncAt"] = now
     snap["sourceMachine"] = machineTag
-    try? FileManager.default.createDirectory(atPath: syncDir, withIntermediateDirectories: true)
-    let url = syncDir + "/[\(machineTag)] sync.json"
-    if let d = try? JSONSerialization.data(withJSONObject: snap, options: [.prettyPrinted]) {
-        try? d.write(to: URL(fileURLWithPath: url))
-        logLine("sync: 广播 fp=\(fp) items=\((snap["items"] as? [[String: Any]])?.count ?? 0)")
-        // 本地 inbox 副本（无空格文件名）供对端主动拉取
-        let inboxCopy = syncInbox + "/\(machineTag)-sync.json"
-        try? FileManager.default.createDirectory(atPath: syncInbox, withIntermediateDirectories: true)
-        try? FileManager.default.removeItem(atPath: inboxCopy)
-        try? FileManager.default.copyItem(atPath: url, toPath: inboxCopy)
-        pushToPeers(inboxCopy)   // SSH 直推加速（秒级）→ 目标也是无空格文件名
+    let items = (snap["items"] as? [[String: Any]])?.count ?? 0
+    let resp = hubPost(body: snap)
+    let accepted = (resp?["accepted"] as? Bool) ?? false
+    if accepted {
+        logLine("sync: 上报中枢 ✅ 接受 fp=\(fp) items=\(items)")
+        st["baselineFingerprint"] = fp
+        st["lastBroadcastFingerprint"] = fp
+        st["lastBroadcastAt"] = now
+        st["recentBroadcasts"] = recent + [now]
+    } else {
+        logLine("sync: 上报被拒（中枢已有更新版本 \(resp?["latestSyncAt"] ?? "?")）fp=\(fp)")
+        st["baselineFingerprint"] = fp   // 本机已知，等下一轮拉取中枢
     }
-    st["baselineFingerprint"] = fp
-    st["lastBroadcastFingerprint"] = fp
-    st["lastBroadcastAt"] = now
-    st["recentBroadcasts"] = recent + [now]
     syncState = st
     saveSyncState(st)
 }
 
-/// 拉取：主线程执行（atomicWrite / microNudge 需要主线程 + AX 权限）
-/// 候选来源：SSH inbox（秒级）+ iCloud sync 目录（分钟级兜底），同机取 syncAt 最新
+/// 从中枢拉取最新布局并应用（主线程）
 func pullRemote() {
     guard autoSyncOn else { return }
-    // 权威机只推不拉：本机就是权威源时不应用任何远端布局（避免被反向拉走 + QSpace 重启闪烁 + 循环变慢）
-    if !authorityMachine.isEmpty && authorityMachine == machineTag { return }
-    try? FileManager.default.createDirectory(atPath: syncInbox, withIntermediateDirectories: true)
-    var best: [String: (snap: [String: Any], fp: String, at: Int)] = [:]
-    for dir in [syncInbox, syncDir] {
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { continue }
-        for f in files where f.hasSuffix(".json") && !f.hasPrefix("[\(machineTag)]") {
-            // 权威模式：只应用权威机的文件，忽略其他机器的残留广播
-            if !authorityMachine.isEmpty && !f.contains(authorityMachine) { continue }
-            let path = dir + "/" + f
-            guard let d = FileManager.default.contents(atPath: path),
-                  let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-                  let fp = snap["layoutFingerprint"] as? String,
-                  let at = snap["syncAt"] as? Int else { continue }
-            if let cur = best[f], cur.at >= at { continue }
-            best[f] = (snap, fp, at)
-        }
+    guard let remote = hubGet() else {
+        logLine("sync: 中枢无响应（GET 失败）")
+        return
     }
+    guard let at = remote["syncAt"] as? Int,
+          let fp = remote["layoutFingerprint"] as? String,
+          let items = remote["items"] as? [[String: Any]], !items.isEmpty else { return }
     let st = loadSyncState()
     let appliedAt = st["lastAppliedAt"] as? Int ?? 0
-    let lastAppliedFp = st["lastAppliedFingerprint"] as? String ?? ""
-    for (f, c) in best.sorted(by: { $0.key < $1.key }) {
-        // 闸④：只跳过"当前已生效的指纹"和旧消息（历史指纹不再拦截，否则 A→B→A 会卡）
-        if c.fp == lastAppliedFp { continue }
-        if c.at <= appliedAt { continue }
-        logLine("pull: 应用候选 \(f) fp=\(c.fp) at=\(c.at) appliedAt=\(appliedAt)")
-        applyRemote(c.snap, fp: c.fp, file: f)
-        return   // 一轮只处理一台
+    let lastFp = st["lastAppliedFingerprint"] as? String ?? ""
+    if fp == lastFp { return }                     // 闸④ 当前生效指纹
+    if at <= appliedAt { return }                  // 旧消息
+    if let conf = loadConf(), let local = makeGridSnapshot(conf: conf),
+       (local["layoutFingerprint"] as? String) == fp {
+        logLine("sync: 中枢即本机布局，无需应用")
+        return
     }
+    logLine("sync: 拉取中枢 syncAt=\(at) source=\(remote["sourceMachine"] ?? "?") items=\(items.count) fp=\(fp)")
+    applyRemote(remote, fp: fp, file: "hub")
 }
 
-var applyingRemote = false   // 主线程防重入
+var applyingRemote = false
 
-/// 应用远端布局（主线程）→ 校验 → 状态落盘
 func applyRemote(_ snap: [String: Any], fp: String, file: String) {
     guard !applyingRemote else { return }
     guard let conf = loadConf(), let r = applyGridSnapshot(snap, to: conf) else {
-        logLine("sync: \(file) 应用失败（applyGridSnapshot 返回 nil）")
+        logLine("sync: 应用失败（applyGridSnapshot 返回 nil）")
         return
     }
     applyingRemote = true
     appDelegate?.setBusy(true)
-    logLine("sync: 应用 \(file) fp=\(fp) matched=\(r.matched) moved=\(r.moved) kept=\(r.kept)")
+    let src = snap["sourceMachine"] as? String ?? file
+    logLine("sync: 应用 source=\(src) spec=\(snap["specKey"] ?? "?") matched=\(r.matched) moved=\(r.moved) kept=\(r.kept)")
     atomicWriteConfAndRestartQSpace(r.newConf)
     microNudge(conf: r.newConf)
-    // 每次同步都校验（杰哥要求）：图标格合法 + 与期望偏差
     let v = verifyAfterApply(snap)
     logLine("sync: 校验 ok=\(v.ok) checked=\(v.checked) bad=\(v.bad) total=\(v.total)")
     var st = loadSyncState()
     st["lastAppliedFingerprint"] = fp
     st["lastAppliedAt"] = Int(Date().timeIntervalSince1970)
-    var recent = st["recentFingerprints"] as? [String] ?? []
-    recent.insert(fp, at: 0)
-    if recent.count > 20 { recent = Array(recent.prefix(20)) }
-    st["recentFingerprints"] = recent
     st["lastVerify"] = ["ok": v.ok, "checked": v.checked, "bad": v.bad, "total": v.total,
-                        "at": Int(Date().timeIntervalSince1970),
-                        "source": snap["sourceMachine"] as? String ?? file]
+                        "at": Int(Date().timeIntervalSince1970), "source": src]
     if let c2 = loadConf(), let s2 = makeGridSnapshot(conf: c2) {
-        st["baselineFingerprint"] = s2["layoutFingerprint"] as? String ?? ""   // 闸①：应用结果成为新基线
+        st["baselineFingerprint"] = s2["layoutFingerprint"] as? String ?? ""
     }
     saveSyncState(st)
     applyingRemote = false
     appDelegate?.setBusy(false)
     appDelegate?.rebuildMenu()
-    let src = snap["sourceMachine"] as? String ?? file
     notify(v.ok
         ? "已同步「\(src)」布局（\(r.moved) 个归位，校验通过 \(v.checked) 个）"
-        : "⚠️ 同步「\(src)」完成但校验不通过：\(v.bad)/\(v.total) 个不到位（详见日志）")
+        : "⚠️ 同步「\(src)」完成但校验不通过：\(v.bad)/\(v.total)（详见日志）")
 }
 
-/// 应用后校验：①格合法（不越界、不进禁区）②与纯映射期望偏差在容差内（禁区/冲突推移视为合理）
+/// 应用后校验：①格合法（不越界/不进禁区）②与纯映射期望偏差在容差内（禁区/冲突推移视为合理）
 func verifyAfterApply(_ snap: [String: Any]) -> (ok: Bool, checked: Int, bad: Int, total: Int) {
     guard let srcKey = snap["specKey"] as? String, let src = SPEC_ALL[srcKey],
           let conf = loadConf(), let actual = makeGridSnapshot(conf: conf),
@@ -1107,40 +1043,55 @@ func verifyAfterApply(_ snap: [String: Any]) -> (ok: Bool, checked: Int, bad: In
         if let n = a["name"] as? String, let c = a["col"] as? Int, let r = a["row"] as? Int { amap[n] = (c, r) }
     }
     var checked = 0, bad = 0
-    var badList: [[String: Any]] = []
     for s in sitems {
         guard let n = s["name"] as? String, let c = s["col"] as? Int, let r = s["row"] as? Int else { continue }
-        guard let got = amap[n] else { continue }   // 本机还没这个文件（iCloud 未到），不判错
+        guard let got = amap[n] else { continue }   // 本机还没这个文件，不判错
         checked += 1
-        if cellBlocked(dst, got.0, got.1) {
-            bad += 1
-            badList.append(["name": n, "exp": "\(c),\(r)", "got": "\(got.0),\(got.1)", "why": "blocked"])
-            continue
-        }
+        if cellBlocked(dst, got.0, got.1) { bad += 1; continue }
         let (ec, er) = mapCell(from: src, to: dst, col: c, row: r)
         let dc = got.0 - ec, dr = got.1 - er
-        // 合理推移：同行向右推（列偏大、行不变）或同列向下推（列不变、行偏大）
         let rowSame = dr == 0 && dc >= 0 && dc <= 12
         let colSame = dc == 0 && dr >= 0 && dr <= 3
-        if !rowSame && !colSame {
-            bad += 1
-            badList.append(["name": n, "exp": "\(ec),\(er)", "got": "\(got.0),\(got.1)", "why": "far"])
-        }
-    }
-    if !badList.isEmpty {
-        // 保留最多 10 条明细供菜单/日志查看
-        recentVerifyBad = badList
+        if !rowSame && !colSame { bad += 1 }
     }
     return (bad == 0, checked, bad, sitems.count)
 }
 
-var recentVerifyBad: [[String: Any]] = []
+/// 屏幕状态（开合盖/切屏）变化 → 用新套参数强制重应用中枢最新布局
+var lastSpecKey = ""
+
+func checkSpecChange() {
+    guard let conf = loadConf(), let attrs = conf["itemAttrs"] as? [[String: Any]],
+          let ctx = localGridContext(attrs: attrs) else { return }
+    let key = ctx.spec.key
+    if lastSpecKey.isEmpty { lastSpecKey = key; return }
+    if key != lastSpecKey {
+        logLine("sync: 屏幕切换 \(lastSpecKey) → \(key)，强制重新应用中枢布局")
+        lastSpecKey = key
+        var st = loadSyncState()
+        st.removeValue(forKey: "lastAppliedFingerprint")
+        st.removeValue(forKey: "lastAppliedAt")
+        saveSyncState(st)
+    }
+}
+
+var syncTickCount = 0
 
 func runSyncCycle() {
-    syncQueue.async {          // 串行化，防重入
-        pullFromPeers()        // 拉取对端 inbox（异步，秒级通道）
+    syncTickCount += 1
+    if syncTickCount <= 3 { logLine("sync: tick #\(syncTickCount)") }
+    let trace = syncTickCount <= 2
+    syncQueue.async {
+        if trace { logLine("sync[1] block 开始") }
+        checkSpecChange()
+        if trace { logLine("sync[2] specCheck 完成") }
         broadcastIfNeeded()
-        DispatchQueue.main.sync { pullRemote() }   // 应用在主线程（atomicWrite/microNudge 需要）
+        if trace { logLine("sync[3] broadcast 完成") }
+        DispatchQueue.main.sync {
+            if trace { logLine("sync[4] 进入 main，执行 pullRemote") }
+            pullRemote()
+            if trace { logLine("sync[5] pullRemote 完成") }
+        }
     }
 }
 
@@ -1152,6 +1103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var busy = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        logLine("startup: pid=\(getpid()) hub=\(hubCandidates.joined(separator: " -> ")) machine=\(machineTag)")
         let screenChangeNote = Notification.Name("NSWorkspaceDidChangeScreenParametersNotification")
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: screenChangeNote, object: nil, queue: .main) { [weak self] _ in
@@ -1503,28 +1455,21 @@ if CommandLine.arguments.contains("--selftest") {
     exit(ok ? 0 : 1)
 }
 
-// 拉取调试：--pulldebug 打印每个远端文件的解析/应用结果
+// 拉取调试：--pulldebug 打印中枢当前布局的解析/应用结果
 if CommandLine.arguments.contains("--pulldebug") {
     syncState = loadSyncState()
-    print("machineTag=\(machineTag) syncDir=\(syncDir)")
+    print("machineTag=\(machineTag) hub=\(hubCandidates.joined(separator: " -> "))")
     print("state:", syncState)
-    guard let files = try? FileManager.default.contentsOfDirectory(atPath: syncDir) else {
-        print("NO SYNC DIR"); exit(1)
+    guard let snap = hubGet(), !snap.isEmpty else {
+        print("中枢无布局"); exit(1)
     }
-    print("files:", files)
-    for f in files.sorted() where f.hasSuffix(".json") {
-        print("-- \(f) isSelf=\(f.hasPrefix("[\(machineTag)]"))")
-        let path = syncDir + "/" + f
-        guard let d = FileManager.default.contents(atPath: path) else { print("  read fail"); continue }
-        guard let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { print("  json fail"); continue }
-        let its = snap["items"] as? [[String: Any]] ?? []
-        print("  spec=\(snap["specKey"] ?? "?") fp=\(snap["layoutFingerprint"] ?? "?") at=\(snap["syncAt"] ?? "?") items=\(its.count)")
-        guard let conf = loadConf() else { print("  loadConf fail"); continue }
-        if let r = applyGridSnapshot(snap, to: conf) {
-            print("  APPLY OK matched=\(r.matched) kept=\(r.kept) moved=\(r.moved)")
-        } else {
-            print("  APPLY NIL")
-        }
+    let its = snap["items"] as? [[String: Any]] ?? []
+    print("spec=\(snap["specKey"] ?? "?") src=\(snap["sourceMachine"] ?? "?") fp=\(snap["layoutFingerprint"] ?? "?") at=\(snap["syncAt"] ?? "?") items=\(its.count)")
+    guard let conf = loadConf() else { print("loadConf fail"); exit(1) }
+    if let r = applyGridSnapshot(snap, to: conf) {
+        print("APPLY OK matched=\(r.matched) kept=\(r.kept) moved=\(r.moved)")
+    } else {
+        print("APPLY NIL")
     }
     exit(0)
 }
