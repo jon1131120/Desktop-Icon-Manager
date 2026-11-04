@@ -1097,7 +1097,16 @@ func broadcastIfNeeded() {
 /// 后台线程：抓取中枢最新（网络操作不占主线程，ZT 慢时也不卡菜单）
 func fetchRemote() -> [String: Any]? {
     guard autoSyncOn else { return nil }
-    if let remote = hubGet() { return remote }
+    if let remote = hubGet() {
+        // ⭐ 拉取成功必须归零退避（上报路径 L1076 有归零，这里此前漏了）
+        //    否则网络恢复后 streak 不减、退避一直卡在 60 秒上限，日志"连续 N 次"无限增长
+        if hubFailStreak > 0 {
+            logLine("sync: 拉取恢复，退避归零（此前连续失败 \(hubFailStreak) 次）")
+            hubFailStreak = 0
+            hubNextRetryAt = 0
+        }
+        return remote
+    }
     // 网络失败退避
     let now = Int(Date().timeIntervalSince1970)
     if now >= hubNextRetryAt {
@@ -1330,10 +1339,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshLayoutsAsync()  // 顺带后台刷新共享快照目录（别机新快照 30 秒内进入本机视野）
         }
         RunLoop.main.add(poll, forMode: .common)
-        // 合盖（睡眠前）：绑定方案则先退出 QSpace 再写 conf（防内存回写）
+        // 合盖（睡眠前）：无需额外动作
+        // （旧「绑定方案」已废弃：合盖/开盖绑定快照由「自动识别当前套 A/B/C」取代。
+        //   原来这里调用的 applyBoundLayout() 是空函数，纯死调用，已移除。
+        //   睡眠时 QSpace 若在运行，其内存回写风险由 atomicWriteConfAndRestartQSpace
+        //   的「先 terminate → 写 → 重启」流程兜底。）
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
-            applyBoundLayout(kind: "sleep", restart: false)
+            logLine("event: willSleep（合盖/睡眠）")
         }
         // 开盖（唤醒后 4 秒，等系统完成屏幕重构）：绑定方案优先，否则按指纹匹配，然后时光机存档
         NSWorkspace.shared.notificationCenter.addObserver(
