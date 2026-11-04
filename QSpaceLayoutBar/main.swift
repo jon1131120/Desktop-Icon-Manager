@@ -883,11 +883,14 @@ func httpGetJSON(_ urlStr: String, timeout: TimeInterval = 3) -> [String: Any]? 
     if !tok.isEmpty { req.setValue(tok, forHTTPHeaderField: "X-Hub-Token") }
     let sem = DispatchSemaphore(value: 0)
     var result: [String: Any]?
-    URLSession.shared.dataTask(with: req) { data, _, _ in
+    var httpCode = 0
+    URLSession.shared.dataTask(with: req) { data, resp, _ in
+        if let r = resp as? HTTPURLResponse { httpCode = r.statusCode }
         if let d = data, let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] { result = o }
         sem.signal()
     }.resume()
     _ = sem.wait(timeout: .now() + timeout + 2)
+    logHTTPCode("GET", urlStr, httpCode, result)
     return result
 }
 
@@ -902,12 +905,29 @@ func httpPostJSON(_ urlStr: String, body: [String: Any], timeout: TimeInterval =
     req.httpBody = bd
     let sem = DispatchSemaphore(value: 0)
     var result: [String: Any]?
-    URLSession.shared.dataTask(with: req) { data, _, _ in
+    var httpCode = 0
+    URLSession.shared.dataTask(with: req) { data, resp, _ in
+        if let r = resp as? HTTPURLResponse { httpCode = r.statusCode }
         if let d = data, let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] { result = o }
         sem.signal()
     }.resume()
     _ = sem.wait(timeout: .now() + timeout + 2)
+    logHTTPCode("POST", urlStr, httpCode, result)
     return result
+}
+
+/// 非 200 必须落日志：401=令牌失效 / 403=网段外 / 400=数据被拒 —— 排障一眼分清
+func logHTTPCode(_ method: String, _ url: String, _ code: Int, _ body: [String: Any]?) {
+    guard code != 200 else { return }
+    let reason: String
+    switch code {
+    case 401: reason = "令牌失效（hub-token.txt 与中枢不一致）"
+    case 403: reason = "网段外被拒"
+    case 400: reason = "数据被拒：\(body?["error"] as? String ?? "?")"
+    case 404: reason = "中枢无该接口"
+    default:  reason = "HTTP \(code)"
+    }
+    logLine("hub: \(method) \(url) -> \(code) \(reason)")
 }
 
 /// 取中枢服务器时间（用于时钟超前时校准）
@@ -1286,14 +1306,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ note: Notification) {
         if let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
            let sz = attrs[.size] as? Int { logBytesWritten = Int64(sz) }
-        logLine("startup: pid=\(getpid()) hub=\(hubCandidates.joined(separator: " -> ")) machine=\(machineTag)")
+        let appVer = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        logLine("startup: v\(appVer) pid=\(getpid()) hub=\(hubCandidates.joined(separator: " -> ")) machine=\(machineTag)")
         let screenChangeNote = Notification.Name("NSWorkspaceDidChangeScreenParametersNotification")
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: screenChangeNote, object: nil, queue: .main) { [weak self] _ in
             logLine("event: screen parameters changed")
             self?.debounceTimer?.invalidate()
+            // 旧「屏幕变化自动切套」已废弃：3 秒防抖后改为跑一轮同步（checkSpecChange 负责切套）
             self?.debounceTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-                autoSwitchIfNeeded()
+                runSyncCycle()
             }
         }
         // 轮询兜底：合盖=系统睡眠=进程挂起，屏幕变化通知会错过；唤醒后靠轮询补上
@@ -1301,9 +1323,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let poll = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             let fp = currentFingerprint()
             if fp != lastKnownFingerprint {
+                // 旧「自动切套」已废弃：切套由 runSyncCycle 的 checkSpecChange 统一处理
                 logLine("poll: fingerprint changed \(lastKnownFingerprint) -> \(fp)")
                 lastKnownFingerprint = fp
-                autoSwitchIfNeeded()
             }
             refreshLayoutsAsync()  // 顺带后台刷新共享快照目录（别机新快照 30 秒内进入本机视野）
         }
@@ -1333,12 +1355,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let syncT = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in runSyncCycle() }
         RunLoop.main.add(syncT, forMode: .common)
 
-        // 时光机监测：启动 20 秒先跑一次，之后每 30 分钟
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { monitorLayoutChanges() }
-        let t = Timer.scheduledTimer(withTimeInterval: monitorIntervalSec, repeats: true) { _ in
-            monitorLayoutChanges()
-        }
-        RunLoop.main.add(t, forMode: .common)
+        // 「时光机监测」已废弃：自动存档属旧「分电脑快照」体系，改为只在手动保存时存档。
+        // 原实现每 30 分钟调用一个空函数 monitorLayoutChanges()，纯属空转，已整块移除。
 
         rebuildMenu()          // 先用缓存（可能为空）秒建菜单，绝不阻塞启动
         refreshLayoutsAsync()  // 后台拉取共享目录列表，完成后自动重建菜单
@@ -1521,7 +1539,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func monitorNow(_ sender: NSMenuItem) {
-        monitorLayoutChanges()
     }
 
     @objc func toggleNudge(_ sender: NSMenuItem) {
