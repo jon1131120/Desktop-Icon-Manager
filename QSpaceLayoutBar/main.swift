@@ -160,6 +160,7 @@ func atomicWriteConfAndRestartQSpace(_ conf: [String: Any]) {
 func logLine(_ msg: String) {
     let line = "\(Date()): \(msg)\n"
     if let handle = FileHandle(forWritingAtPath: logPath) {
+        handle.seekToEndOfFile()   // FileHandle 默认 offset=0，必须 seek 到末尾，否则每次覆盖日志
         handle.write(line.data(using: .utf8)!)
         handle.closeFile()
     } else {
@@ -541,6 +542,521 @@ func subprocessOutput(_ args: [String]) -> String {
     return String(data: data, encoding: .utf8) ?? ""
 }
 
+// MARK: - 网格映射引擎 v3（2026-11-04，杰哥 40 点标定验证：120/120 吻合、六方向往返 0 漂移）
+//
+// 三套网格：A = Air 21×9；B = MBP 内屏 19×9；C = Studio / MBP 外接 22×9
+// 大白话规则：
+//   1. 贴着组件右边缘的图标 → 相对组件右缘位置不变
+//   2. 贴着屏幕右边缘的图标 → 相对右边缘距离不变（距右 ≤5 格优先）
+//   3. 中间的图标 → 按两侧宽度差线性均摊
+//   4. 行：组件行带内、且非右锚段的图标跟着组件高度差平移（A/B 行5-7 ↔ C 行4-6）
+//   5. 落点撞禁区（组件区 + 自定义禁区）→ 同行向右推、行末向下推，永不落禁区
+struct GridSpec {
+    let key: String
+    let cols: Int
+    let rows: Int
+    let topRight: Int       // 上排组件右缘列
+    let topRows: Int        // 上排组件行数
+    let armRight: Int       // 下排组件右缘列
+    let zone2: (Int, Int)   // 组件行带（行区间）
+    let floorStart: Int     // 地板起始行
+}
+
+let SPEC_A = GridSpec(key: "A", cols: 21, rows: 9, topRight: 9, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8)
+let SPEC_B = GridSpec(key: "B", cols: 19, rows: 9, topRight: 8, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8)
+let SPEC_C = GridSpec(key: "C", cols: 22, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7)
+let SPEC_ALL: [String: GridSpec] = ["A": SPEC_A, "B": SPEC_B, "C": SPEC_C]
+
+// 杰哥 2026-11-04 追加的自定义禁区（列,行）
+let customBlocked: [String: [(Int, Int)]] = [
+    "A": [(10, 4), (11, 4), (12, 4)],
+    "B": [(9, 4), (10, 4), (11, 4), (12, 4)],
+    "C": [(1, 6), (2, 6), (3, 6), (1, 7), (2, 7), (3, 7), (4, 7)],
+]
+
+func leftBase(_ s: GridSpec, _ r: Int) -> Int {
+    if r <= s.topRows { return s.topRight }
+    if r >= s.zone2.0 && r <= s.zone2.1 { return s.armRight }
+    return 0
+}
+
+func cellBlocked(_ s: GridSpec, _ c: Int, _ r: Int) -> Bool {
+    if c < 1 || c > s.cols || r < 1 || r > s.rows { return true }
+    if c <= s.topRight && r <= s.topRows { return true }
+    if c <= s.armRight && r >= s.zone2.0 && r <= s.zone2.1 { return true }
+    if (customBlocked[s.key] ?? []).contains(where: { $0.0 == c && $0.1 == r }) { return true }
+    return false
+}
+
+/// 网格映射（纯整数）：源格 → 目标格；落禁区自动推移到最近可用格
+func mapCell(from s: GridSpec, to d: GridSpec, col: Int, row: Int) -> (Int, Int) {
+    let Ls = leftBase(s, row)
+    let Ws = s.cols - Ls
+    let o = col - Ls
+    let rightAnchor = (Ws - o) <= 5
+    var dr = row
+    if row >= s.zone2.0 && row <= s.zone2.1 && !rightAnchor {
+        dr = row + (d.zone2.0 - s.zone2.0)
+    }
+    dr = max(1, min(d.rows, dr))
+    let Ld = leftBase(d, dr)
+    let Wd = d.cols - Ld
+    var dc: Int
+    if rightAnchor {
+        dc = Ld + Wd - (Ws - o)
+    } else if o <= 6 {
+        dc = Ld + o
+    } else {
+        let x0 = 6.0, x1 = Double(Ws - 5), y0 = 6.0, y1 = Double(Wd - 5)
+        let t = (Double(o) - x0) / max(1.0, x1 - x0)
+        dc = Ld + Int((y0 + t * (y1 - y0)).rounded())
+    }
+    dc = max(1, min(d.cols, dc))
+    return (dc, dr)   // 纯映射；禁区/占用推移在 apply 阶段处理
+}
+
+// ---- 40 点标定自检（--selftest 模式跑，不通过则拒绝启动自动同步）----
+struct CalPoint { let n: Int; let a: (Int, Int); let b: (Int, Int); let c: (Int, Int) }
+let calibrationPoints: [CalPoint] = [
+    CalPoint(n: 1,  a: (1, 8),   b: (1, 8),   c: (1, 8)),
+    CalPoint(n: 2,  a: (2, 8),   b: (2, 8),   c: (2, 8)),
+    CalPoint(n: 3,  a: (3, 8),   b: (3, 8),   c: (3, 8)),
+    CalPoint(n: 4,  a: (4, 8),   b: (4, 8),   c: (4, 8)),
+    CalPoint(n: 5,  a: (5, 5),   b: (5, 5),   c: (4, 4)),
+    CalPoint(n: 6,  a: (5, 6),   b: (5, 6),   c: (4, 5)),
+    CalPoint(n: 7,  a: (5, 7),   b: (5, 7),   c: (4, 6)),
+    CalPoint(n: 8,  a: (5, 8),   b: (5, 8),   c: (5, 8)),
+    CalPoint(n: 9,  a: (6, 7),   b: (6, 7),   c: (5, 6)),
+    CalPoint(n: 10, a: (6, 8),   b: (6, 8),   c: (6, 8)),
+    CalPoint(n: 11, a: (10, 1),  b: (9, 1),   c: (7, 1)),
+    CalPoint(n: 12, a: (10, 2),  b: (9, 2),   c: (7, 2)),
+    CalPoint(n: 13, a: (10, 3),  b: (9, 3),   c: (7, 3)),
+    CalPoint(n: 14, a: (6, 5),   b: (6, 5),   c: (5, 4)),
+    CalPoint(n: 15, a: (7, 5),   b: (7, 5),   c: (6, 4)),
+    CalPoint(n: 16, a: (8, 5),   b: (8, 5),   c: (7, 4)),
+    CalPoint(n: 17, a: (9, 5),   b: (9, 5),   c: (8, 4)),
+    CalPoint(n: 18, a: (10, 5),  b: (10, 5),  c: (9, 4)),
+    CalPoint(n: 19, a: (11, 3),  b: (10, 3),  c: (8, 3)),
+    CalPoint(n: 20, a: (21, 1),  b: (19, 1),  c: (22, 1)),
+    CalPoint(n: 21, a: (21, 2),  b: (19, 2),  c: (22, 2)),
+    CalPoint(n: 22, a: (21, 3),  b: (19, 3),  c: (22, 3)),
+    CalPoint(n: 23, a: (21, 4),  b: (19, 4),  c: (22, 4)),
+    CalPoint(n: 24, a: (21, 5),  b: (19, 5),  c: (22, 5)),
+    CalPoint(n: 25, a: (21, 6),  b: (19, 6),  c: (22, 6)),
+    CalPoint(n: 26, a: (21, 7),  b: (19, 7),  c: (22, 7)),
+    CalPoint(n: 27, a: (21, 8),  b: (19, 8),  c: (22, 8)),
+    CalPoint(n: 28, a: (21, 9),  b: (19, 9),  c: (22, 9)),
+    CalPoint(n: 29, a: (20, 1),  b: (18, 1),  c: (21, 1)),
+    CalPoint(n: 30, a: (20, 5),  b: (18, 5),  c: (21, 5)),
+    CalPoint(n: 31, a: (20, 9),  b: (18, 9),  c: (21, 9)),
+    CalPoint(n: 32, a: (19, 1),  b: (17, 1),  c: (20, 1)),
+    CalPoint(n: 33, a: (19, 4),  b: (17, 4),  c: (20, 4)),
+    CalPoint(n: 34, a: (19, 9),  b: (17, 9),  c: (20, 9)),
+    CalPoint(n: 35, a: (18, 1),  b: (16, 1),  c: (19, 1)),
+    CalPoint(n: 36, a: (18, 9),  b: (16, 9),  c: (19, 9)),
+    CalPoint(n: 37, a: (17, 1),  b: (15, 1),  c: (18, 1)),
+    CalPoint(n: 38, a: (17, 9),  b: (15, 9),  c: (18, 9)),
+    CalPoint(n: 39, a: (16, 1),  b: (14, 1),  c: (17, 1)),
+    CalPoint(n: 40, a: (16, 9),  b: (14, 9),  c: (17, 9)),
+]
+
+func runMappingSelfTest() -> Bool {
+    var total = 0, pass = 0
+    let pairs = [("A", "B"), ("A", "C"), ("B", "C")]
+    for p in calibrationPoints {
+        for (sk, dk) in pairs {
+            guard let s = SPEC_ALL[sk], let d = SPEC_ALL[dk] else { continue }
+            let src: (Int, Int) = sk == "A" ? p.a : (sk == "B" ? p.b : p.c)
+            let dst: (Int, Int) = dk == "B" ? p.b : p.c
+            let got = mapCell(from: s, to: d, col: src.0, row: src.1)
+            total += 1
+            if got == dst { pass += 1 }
+            else { logLine("selftest FAIL \(sk)->\(dk) #\(p.n) \(src) -> \(got) expect \(dst)") }
+        }
+    }
+    logLine("selftest: \(pass)/\(total) 吻合")
+    return pass == total
+}
+
+// MARK: - 快照 v2：网格化（像素 ↔ 格）+ 布局指纹
+//
+// 像素 ↔ 格换算原则：
+//   x0/y0 = 目标屏图标的最小坐标（三台桌面图标集合相同 → 最左图标 = 列1，语义一致）
+//   step  = 从实际坐标反推（相邻差的最小值众数），差 >15% 才用实测值
+//   保存：col = round((x-x0)/step)+1；应用：x = x0 + (col-1)*step
+
+func fnv1a(_ s: String) -> String {
+    var h: UInt64 = 0xcbf2_9ce4_8422_2325
+    for b in s.utf8 { h ^= UInt64(b); h = h &* 0x0000_0100_0000_01b3 }
+    return String(h, radix: 16)
+}
+
+struct ScreenGroup { let screenId: String; let width: Int; let height: Int; let count: Int }
+
+func screenGroups(_ attrs: [[String: Any]]) -> [ScreenGroup] {
+    var m: [String: (Int, Int, Int)] = [:]
+    for it in attrs {
+        let sid = (it["screen"].map { "\($0)" }) ?? "1"
+        let w = (it["screenWidth"] as? NSNumber)?.intValue ?? 0
+        let h = (it["screenHeight"] as? NSNumber)?.intValue ?? 0
+        var e = m[sid] ?? (w, h, 0)
+        e.2 += 1
+        if e.0 == 0 { e.0 = w }
+        if e.1 == 0 { e.1 = h }
+        m[sid] = e
+    }
+    return m.map { ScreenGroup(screenId: $0.key, width: $0.value.0, height: $0.value.1, count: $0.value.2) }
+        .sorted {
+            if $0.width != $1.width { return $0.width > $1.width }
+            return $0.count > $1.count   // 同宽按图标数，避免历史多屏编号残留组抢占
+        }
+}
+
+func specForSize(_ w: Int, _ h: Int) -> GridSpec? {
+    if w == 1710 && h == 1073 { return SPEC_A }   // Air 内置
+    if w == 1728 && h == 1084 { return SPEC_B }   // MBP 内置
+    if w >= 2400 { return SPEC_C }                 // 2560×1440 外接 / Studio 虚拟屏
+    return nil
+}
+
+/// 本机当前网格角色：目标屏（多屏取外接）+ 对应 spec
+func localGridContext(attrs: [[String: Any]]) -> (screen: ScreenGroup, spec: GridSpec)? {
+    guard let g = screenGroups(attrs).first else { return nil }
+    if let s = specForSize(g.width, g.height) { return (g, s) }
+    switch machineTag {
+    case "Air": return (g, SPEC_A)
+    case "Studio": return (g, SPEC_C)
+    default:
+        let hasBuiltin = NSScreen.screens.contains { s in
+            guard let id = s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return false }
+            return CGDisplayIsBuiltin(id) != 0
+        }
+        return (g, (hasBuiltin && NSScreen.screens.count == 1) ? SPEC_B : SPEC_C)
+    }
+}
+
+/// 单屏判断（不依赖 NSScreen，可在后台线程用）：有效尺寸的屏组只有一种 = 单屏态
+/// 注意过滤 width/height=0 的异常组（如 QSpace 偶发的 screen=29 残留），否则会误判多屏
+func isSingleScreenConf(_ attrs: [[String: Any]]) -> Bool {
+    let groups = screenGroups(attrs).filter { $0.width > 0 && $0.height > 0 }
+    return Set(groups.map { "\($0.width)x\($0.height)" }).count <= 1
+}
+
+/// 实测校准：x0/y0 = 目标屏最小坐标；step = 相邻差最小值众数（>20px 过滤杂值）
+/// 只统计桌面文件（/Volumes/* 卷宗图标不受网格约束，会污染统计）
+let desktopRootPath = NSString(string: "~/Desktop/").expandingTildeInPath + "/"
+func isDesktopItem(_ it: [String: Any]) -> Bool {
+    guard let n = it["name"] as? String else { return false }
+    return n.hasPrefix(desktopRootPath)
+}
+
+func calibrateGrid(_ attrs: [[String: Any]], screenId: String) -> (x0: Double, y0: Double, stepX: Double, stepY: Double)? {
+    let singleScreen = isSingleScreenConf(attrs)
+    let items = attrs.filter {
+        isDesktopItem($0) && (singleScreen || (($0["screen"].map { "\($0)" }) ?? "1") == screenId)
+    }
+    let xs = items.compactMap { ($0["x"] as? NSNumber)?.doubleValue }
+    let ys = items.compactMap { ($0["y"] as? NSNumber)?.doubleValue }
+    guard let minX = xs.min(), let minY = ys.min() else { return nil }
+    func infer(_ v: [Double], fallback: Double) -> Double {
+        let s = Array(Set(v.map { $0.rounded() })).sorted()
+        guard s.count >= 2 else { return fallback }
+        let ds = zip(s, s.dropFirst()).map { $1 - $0 }.filter { $0 > 20 }
+        guard !ds.isEmpty else { return fallback }
+        let mn = ds.min()!
+        let cand = ds.filter { $0 <= mn * 1.2 }
+        let avg = cand.reduce(0, +) / Double(cand.count)
+        return avg > 20 ? avg : fallback
+    }
+    return (minX, minY, infer(xs, fallback: 90), infer(ys, fallback: 114))
+}
+
+/// 生成网格化快照（v2）：只收目标屏图标（单屏机器：所有图标归一，忽略历史 screen 编号）
+func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
+    guard let attrs = conf["itemAttrs"] as? [[String: Any]],
+          let ctx = localGridContext(attrs: attrs),
+          let cal = calibrateGrid(attrs, screenId: ctx.screen.screenId) else { return nil }
+    let singleScreen = isSingleScreenConf(attrs)
+    var gridItems: [[String: Any]] = []
+    for it in attrs {
+        let sid = (it["screen"].map { "\($0)" }) ?? "1"
+        guard isDesktopItem(it),
+              singleScreen || sid == ctx.screen.screenId,
+              let name = it["name"] as? String,
+              let x = (it["x"] as? NSNumber)?.doubleValue,
+              let y = (it["y"] as? NSNumber)?.doubleValue else { continue }
+        let col = Int(((x - cal.x0) / cal.stepX).rounded()) + 1
+        let row = Int(((y - cal.y0) / cal.stepY).rounded()) + 1
+        gridItems.append(["name": name,
+                          "col": max(1, min(ctx.spec.cols, col)),
+                          "row": max(1, min(ctx.spec.rows, row))])
+    }
+    let fpStr = gridItems
+        .sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+        .map { "\($0["name"] as? String ?? ""):\($0["col"] as? Int ?? 0),\($0["row"] as? Int ?? 0)" }
+        .joined(separator: "|")
+    var settings: [String: Any] = [:]
+    for (k, v) in conf where k != "itemAttrs" { settings[k] = v }
+    return [
+        "formatVersion": 2,
+        "specKey": ctx.spec.key,
+        "screenId": ctx.screen.screenId,
+        "screenSize": "\(ctx.screen.width)x\(ctx.screen.height)",
+        "grid": ["cols": ctx.spec.cols, "rows": ctx.spec.rows,
+                 "x0": cal.x0, "y0": cal.y0, "colStep": cal.stepX, "rowStep": cal.stepY],
+        "items": gridItems,
+        "layoutFingerprint": fnv1a(fpStr),
+        "syncAt": Int(Date().timeIntervalSince1970),
+        "sourceMachine": machineTag,
+        "desktopSettings": settings,
+        "iconCount": gridItems.count,
+    ]
+}
+
+/// 应用网格化快照：源格按映射换算成本机格 → 写像素；同名匹配，未知保留
+func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newConf: [String: Any], matched: Int, kept: Int, moved: Int)? {
+    guard let srcKey = snap["specKey"] as? String, let src = SPEC_ALL[srcKey],
+          let attrs = conf["itemAttrs"] as? [[String: Any]],
+          let ctx = localGridContext(attrs: attrs),
+          let cal = calibrateGrid(attrs, screenId: ctx.screen.screenId),
+          let gridItems = snap["items"] as? [[String: Any]] else { return nil }
+    let dst = ctx.spec
+    let singleScreen = isSingleScreenConf(attrs)
+    // 本机常用 screen 值（单屏归一化目标）
+    let localScreenMode: String = {
+        let vals = attrs.compactMap { $0["screen"].map { "\($0)" } }
+        let counts = vals.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
+        return counts.max { $0.value < $1.value }?.key ?? "1"
+    }()
+    var byName: [String: (Int, Int)] = [:]
+    for g in gridItems {
+        guard let n = g["name"] as? String, let c = g["col"] as? Int, let r = g["row"] as? Int else { continue }
+        byName[n] = (c, r)
+    }
+    var out: [[String: Any]] = []
+    var matched = 0, kept = 0, moved = 0
+    var used = Set<String>()
+    for it in attrs {
+        var ni = it
+        let name = it["name"] as? String ?? ""
+        let sid = (it["screen"].map { "\($0)" }) ?? "1"
+        guard isDesktopItem(it), (singleScreen || sid == ctx.screen.screenId), let (c, r) = byName[name] else {
+            out.append(ni)
+            kept += 1
+            continue
+        }
+        if singleScreen { ni["screen"] = localScreenMode }
+        let ox = (it["x"] as? NSNumber)?.intValue ?? -1
+        let oy = (it["y"] as? NSNumber)?.intValue ?? -1
+        let oc = ox >= 0 ? Int(((Double(ox) - cal.x0) / cal.stepX).rounded()) + 1 : -1
+        let orow = oy >= 0 ? Int(((Double(oy) - cal.y0) / cal.stepY).rounded()) + 1 : -1
+        var (dc, dr) = mapCell(from: src, to: dst, col: c, row: r)
+        if ox >= 0 && oc == dc && orow == dr {
+            // 原格 == 计算格：原位不动（自定义禁区标定误差不应推移既有图标）
+            used.insert("\(dc),\(dr)")
+            ni["x"] = ox; ni["y"] = oy
+        } else {
+            // 目标格被占用 / 撞禁区 → 行内右推，行末下行
+            var g = 0
+            while used.contains("\(dc),\(dr)") || cellBlocked(dst, dc, dr) {
+                dc += 1
+                if dc > dst.cols { dc = 1; dr += 1 }
+                if dr > dst.rows { break }
+                g += 1
+                if g > 500 { break }
+            }
+            if dr <= dst.rows {
+                used.insert("\(dc),\(dr)")
+                let nx = Int((cal.x0 + Double(dc - 1) * cal.stepX).rounded())
+                let ny = Int((cal.y0 + Double(dr - 1) * cal.stepY).rounded())
+                ni["x"] = nx; ni["y"] = ny
+                if oc != dc || orow != dr {
+                    moved += 1
+                    if CommandLine.arguments.contains("--snapshottest") {
+                        print("MOVE \(name) (\(oc),\(orow)) -> (\(dc),\(dr))  px(\(ox),\(oy)) -> (\(nx),\(ny))")
+                    }
+                }
+            }
+        }
+        matched += 1
+        out.append(ni)
+    }
+    var nc = conf
+    nc["itemAttrs"] = out
+    // 注意：不应用 desktopSettings —— 图标大小/行列间距各机自适配（lod 96 vs 64），跨机套用会显示错乱
+    return (nc, matched, kept, moved)
+}
+
+// MARK: - 布局自动同步引擎（iCloud 通道；防循环四闸：基线比对 / 忽略期 / 单写者 / 指纹去重 + 风暴保护）
+let syncDir = layoutDir + "/sync"
+let syncStatePath = NSString(string: "~/qspace-layouts/sync-state.json").expandingTildeInPath
+var autoSyncOn = UserDefaults.standard.object(forKey: "autoSyncOff") == nil
+// 权威机模式：设置后只有该机广播，其余机器只接收不广播（空 = 双向）
+var authorityMachine: String = UserDefaults.standard.string(forKey: "authorityMachine") ?? ""
+var syncState: [String: Any] = [:]
+let syncQueue = DispatchQueue(label: "qslb.sync")
+
+func loadSyncState() -> [String: Any] {
+    guard let d = FileManager.default.contents(atPath: syncStatePath),
+          let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return [:] }
+    return o
+}
+
+func saveSyncState(_ s: [String: Any]) {
+    let dir = NSString(string: "~/qspace-layouts").expandingTildeInPath
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    if let d = try? JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted]) {
+        try? d.write(to: URL(fileURLWithPath: syncStatePath))
+    }
+}
+
+/// 广播本机布局（单写者：只写 [机名] sync.json；内容不变/忽略期/风暴保护时自动闭嘴）
+func broadcastIfNeeded() {
+    guard autoSyncOn else { return }
+    // 权威机模式：非权威机只接收不广播（第一版以 Air 为准）
+    if !authorityMachine.isEmpty && authorityMachine != machineTag { return }
+    guard let conf = loadConf(), var snap = makeGridSnapshot(conf: conf) else { return }
+    let fp = snap["layoutFingerprint"] as? String ?? ""
+    guard !fp.isEmpty else { return }
+    let now = Int(Date().timeIntervalSince1970)
+    var st = loadSyncState()
+    if fp == (st["baselineFingerprint"] as? String) { return }                 // 闸① 基线比对
+    if fp == (st["lastBroadcastFingerprint"] as? String) {
+        st["baselineFingerprint"] = fp; syncState = st; saveSyncState(st); return
+    }
+    if now - (st["lastAppliedAt"] as? Int ?? 0) < 60 { return }                // 闸② 忽略期
+    let recent = (st["recentBroadcasts"] as? [Int] ?? []).filter { now - $0 < 60 }
+    if recent.count >= 6 { logLine("sync: 风暴保护，暂停广播"); return }        // 风暴保护
+    if let last = recent.last, now - last < 4 { return }                        // 节流 4s
+    snap.removeValue(forKey: "desktopSettings")                                 // 不带设置（各机自适配）
+    snap["syncAt"] = now
+    snap["sourceMachine"] = machineTag
+    try? FileManager.default.createDirectory(atPath: syncDir, withIntermediateDirectories: true)
+    let url = syncDir + "/[\(machineTag)] sync.json"
+    if let d = try? JSONSerialization.data(withJSONObject: snap, options: [.prettyPrinted]) {
+        try? d.write(to: URL(fileURLWithPath: url))
+        logLine("sync: 广播 fp=\(fp) items=\((snap["items"] as? [[String: Any]])?.count ?? 0)")
+    }
+    st["baselineFingerprint"] = fp
+    st["lastBroadcastFingerprint"] = fp
+    st["lastBroadcastAt"] = now
+    st["recentBroadcasts"] = recent + [now]
+    syncState = st
+    saveSyncState(st)
+}
+
+/// 拉取：主线程执行（atomicWrite / microNudge 需要主线程 + AX 权限）
+func pullRemote() {
+    guard autoSyncOn else { return }
+    guard let files = try? FileManager.default.contentsOfDirectory(atPath: syncDir) else {
+        logLine("pull: sync 目录读不到")
+        return
+    }
+    let st = loadSyncState()
+    let appliedAt = st["lastAppliedAt"] as? Int ?? 0
+    let recent = st["recentFingerprints"] as? [String] ?? []
+    for f in files.sorted() where f.hasSuffix(".json") && !f.hasPrefix("[\(machineTag)]") {
+        let path = syncDir + "/" + f
+        guard let d = FileManager.default.contents(atPath: path),
+              let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let fp = snap["layoutFingerprint"] as? String,
+              let at = snap["syncAt"] as? Int else { continue }
+        logLine("pull: 检查 \(f) fp=\(fp) at=\(at) appliedAt=\(appliedAt) recent=\(recent.contains(fp))")
+        if recent.contains(fp) || fp == (st["lastBroadcastFingerprint"] as? String) { continue }  // 闸④
+        if at <= appliedAt { continue }
+        applyRemote(snap, fp: fp, file: f)
+        return   // 一轮只处理一台
+    }
+}
+
+var applyingRemote = false   // 主线程防重入
+
+/// 应用远端布局（主线程）→ 校验 → 状态落盘
+func applyRemote(_ snap: [String: Any], fp: String, file: String) {
+    guard !applyingRemote else { return }
+    guard let conf = loadConf(), let r = applyGridSnapshot(snap, to: conf) else {
+        logLine("sync: \(file) 应用失败（applyGridSnapshot 返回 nil）")
+        return
+    }
+    applyingRemote = true
+    appDelegate?.setBusy(true)
+    logLine("sync: 应用 \(file) fp=\(fp) matched=\(r.matched) moved=\(r.moved) kept=\(r.kept)")
+    atomicWriteConfAndRestartQSpace(r.newConf)
+    microNudge(conf: r.newConf)
+    // 每次同步都校验（杰哥要求）：图标格合法 + 与期望偏差
+    let v = verifyAfterApply(snap)
+    logLine("sync: 校验 ok=\(v.ok) checked=\(v.checked) bad=\(v.bad) total=\(v.total)")
+    var st = loadSyncState()
+    st["lastAppliedFingerprint"] = fp
+    st["lastAppliedAt"] = Int(Date().timeIntervalSince1970)
+    var recent = st["recentFingerprints"] as? [String] ?? []
+    recent.insert(fp, at: 0)
+    if recent.count > 20 { recent = Array(recent.prefix(20)) }
+    st["recentFingerprints"] = recent
+    st["lastVerify"] = ["ok": v.ok, "checked": v.checked, "bad": v.bad, "total": v.total,
+                        "at": Int(Date().timeIntervalSince1970),
+                        "source": snap["sourceMachine"] as? String ?? file]
+    if let c2 = loadConf(), let s2 = makeGridSnapshot(conf: c2) {
+        st["baselineFingerprint"] = s2["layoutFingerprint"] as? String ?? ""   // 闸①：应用结果成为新基线
+    }
+    saveSyncState(st)
+    applyingRemote = false
+    appDelegate?.setBusy(false)
+    appDelegate?.rebuildMenu()
+    let src = snap["sourceMachine"] as? String ?? file
+    notify(v.ok
+        ? "已同步「\(src)」布局（\(r.moved) 个归位，校验通过 \(v.checked) 个）"
+        : "⚠️ 同步「\(src)」完成但校验不通过：\(v.bad)/\(v.total) 个不到位（详见日志）")
+}
+
+/// 应用后校验：①格合法（不越界、不进禁区）②与纯映射期望偏差在容差内（禁区/冲突推移视为合理）
+func verifyAfterApply(_ snap: [String: Any]) -> (ok: Bool, checked: Int, bad: Int, total: Int) {
+    guard let srcKey = snap["specKey"] as? String, let src = SPEC_ALL[srcKey],
+          let conf = loadConf(), let actual = makeGridSnapshot(conf: conf),
+          let dstKey = actual["specKey"] as? String, let dst = SPEC_ALL[dstKey],
+          let sitems = snap["items"] as? [[String: Any]],
+          let aitems = actual["items"] as? [[String: Any]] else { return (false, 0, 0, 0) }
+    var amap: [String: (Int, Int)] = [:]
+    for a in aitems {
+        if let n = a["name"] as? String, let c = a["col"] as? Int, let r = a["row"] as? Int { amap[n] = (c, r) }
+    }
+    var checked = 0, bad = 0
+    var badList: [[String: Any]] = []
+    for s in sitems {
+        guard let n = s["name"] as? String, let c = s["col"] as? Int, let r = s["row"] as? Int else { continue }
+        guard let got = amap[n] else { continue }   // 本机还没这个文件（iCloud 未到），不判错
+        checked += 1
+        if cellBlocked(dst, got.0, got.1) {
+            bad += 1
+            badList.append(["name": n, "exp": "\(c),\(r)", "got": "\(got.0),\(got.1)", "why": "blocked"])
+            continue
+        }
+        let (ec, er) = mapCell(from: src, to: dst, col: c, row: r)
+        let dc = got.0 - ec, dr = got.1 - er
+        // 合理推移：同行向右推（列偏大、行不变）或同列向下推（列不变、行偏大）
+        let rowSame = dr == 0 && dc >= 0 && dc <= 12
+        let colSame = dc == 0 && dr >= 0 && dr <= 3
+        if !rowSame && !colSame {
+            bad += 1
+            badList.append(["name": n, "exp": "\(ec),\(er)", "got": "\(got.0),\(got.1)", "why": "far"])
+        }
+    }
+    if !badList.isEmpty {
+        // 保留最多 10 条明细供菜单/日志查看
+        recentVerifyBad = badList
+    }
+    return (bad == 0, checked, bad, sitems.count)
+}
+
+var recentVerifyBad: [[String: Any]] = []
+
+func runSyncCycle() {
+    syncQueue.async {          // 串行化，防重入
+        broadcastIfNeeded()
+        DispatchQueue.main.sync { pullRemote() }   // 应用在主线程（atomicWrite/microNudge 需要）
+    }
+}
+
 // MARK: - AppDelegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -588,6 +1104,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lastKnownFingerprint = currentFingerprint()
             }
         }
+        // 布局自动同步：每 8 秒一轮（广播本机 + 拉取其他机器）
+        syncState = loadSyncState()
+        let syncT = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { _ in runSyncCycle() }
+        RunLoop.main.add(syncT, forMode: .common)
+
         // 时光机监测：启动 20 秒先跑一次，之后每 30 分钟
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { monitorLayoutChanges() }
         let t = Timer.scheduledTimer(withTimeInterval: monitorIntervalSec, repeats: true) { _ in
@@ -647,6 +1168,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let cur = NSMenuItem(title: "当前布局：\(currentLayoutName)", action: nil, keyEquivalent: "")
         cur.isEnabled = false
         menu.addItem(cur)
+        menu.addItem(.separator())
+
+        // 布局自动同步区（三台互通）
+        let syncItem = NSMenuItem(title: "🔄 三台布局自动同步", action: #selector(toggleAutoSync(_:)), keyEquivalent: "")
+        syncItem.target = self
+        syncItem.state = autoSyncOn ? .on : .off
+        menu.addItem(syncItem)
+        let syncNow = NSMenuItem(title: "📡 立即同步一次", action: #selector(syncNowClicked(_:)), keyEquivalent: "")
+        syncNow.target = self
+        menu.addItem(syncNow)
+        let stNow = loadSyncState()
+        if let at = stNow["lastAppliedAt"] as? Int, at > 0 {
+            let df = DateFormatter(); df.dateFormat = "MM-dd HH:mm:ss"
+            let info = NSMenuItem(title: "　最近应用：\(df.string(from: Date(timeIntervalSince1970: TimeInterval(at))))", action: nil, keyEquivalent: "")
+            info.isEnabled = false
+            menu.addItem(info)
+        }
+        if let bfp = stNow["lastBroadcastFingerprint"] as? String {
+            let info = NSMenuItem(title: "　本机指纹：\(bfp.prefix(8))", action: nil, keyEquivalent: "")
+            info.isEnabled = false
+            menu.addItem(info)
+        }
         menu.addItem(.separator())
 
         // 手动方案（子菜单：应用/重命名/删除）
@@ -744,6 +1287,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: 动作
+
+    @objc func toggleAutoSync(_ sender: NSMenuItem) {
+        autoSyncOn = !autoSyncOn
+        UserDefaults.standard.set(!autoSyncOn, forKey: "autoSyncOff")
+        logLine("sync: 自动同步 \(autoSyncOn ? "开" : "关")")
+        rebuildMenu()
+        if autoSyncOn { syncState = loadSyncState(); runSyncCycle() }
+    }
+
+    @objc func syncNowClicked(_ sender: NSMenuItem) {
+        syncState = loadSyncState()
+        runSyncCycle()
+        notify("已触发一次同步（8 秒内完成）")
+    }
 
     @objc func restoreClicked(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
@@ -851,6 +1408,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // MARK: - 启动
+
+// 自检模式：QSpaceLayoutBar --selftest → 只跑映射自检后退出（不建菜单、不碰 QSpace）
+if CommandLine.arguments.contains("--selftest") {
+    let ok = runMappingSelfTest()
+    print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
+    exit(ok ? 0 : 1)
+}
+
+// 拉取调试：--pulldebug 打印每个远端文件的解析/应用结果
+if CommandLine.arguments.contains("--pulldebug") {
+    syncState = loadSyncState()
+    print("machineTag=\(machineTag) syncDir=\(syncDir)")
+    print("state:", syncState)
+    guard let files = try? FileManager.default.contentsOfDirectory(atPath: syncDir) else {
+        print("NO SYNC DIR"); exit(1)
+    }
+    print("files:", files)
+    for f in files.sorted() where f.hasSuffix(".json") {
+        print("-- \(f) isSelf=\(f.hasPrefix("[\(machineTag)]"))")
+        let path = syncDir + "/" + f
+        guard let d = FileManager.default.contents(atPath: path) else { print("  read fail"); continue }
+        guard let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { print("  json fail"); continue }
+        let its = snap["items"] as? [[String: Any]] ?? []
+        print("  spec=\(snap["specKey"] ?? "?") fp=\(snap["layoutFingerprint"] ?? "?") at=\(snap["syncAt"] ?? "?") items=\(its.count)")
+        guard let conf = loadConf() else { print("  loadConf fail"); continue }
+        if let r = applyGridSnapshot(snap, to: conf) {
+            print("  APPLY OK matched=\(r.matched) kept=\(r.kept) moved=\(r.moved)")
+        } else {
+            print("  APPLY NIL")
+        }
+    }
+    exit(0)
+}
+
+// 快照 v2 自检：读当前 conf → 生成网格快照 → 应用到自身（同一套 spec 应零移动）
+if CommandLine.arguments.contains("--snapshottest") {
+    guard let conf = loadConf(), let snap = makeGridSnapshot(conf: conf) else {
+        print("SNAPTEST FAIL: 读不到 conf 或生成快照失败")
+        exit(1)
+    }
+    let items = snap["items"] as? [[String: Any]] ?? []
+    print("spec=\(snap["specKey"] ?? "?") screen=\(snap["screenSize"] ?? "?") icons=\(items.count) fp=\(snap["layoutFingerprint"] ?? "?")")
+    guard let r = applyGridSnapshot(snap, to: conf) else {
+        print("SNAPTEST FAIL: 应用失败")
+        exit(1)
+    }
+    print("matched=\(r.matched) kept=\(r.kept) moved=\(r.moved)")
+    let ok = r.moved == 0 && r.matched > 0
+    print(ok ? "SNAPTEST PASS" : "SNAPTEST FAIL")
+    exit(ok ? 0 : 1)
+}
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
