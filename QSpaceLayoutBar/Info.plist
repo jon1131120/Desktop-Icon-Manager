@@ -28,5 +28,9 @@
     <string>13.0</string>
     <key>NSHumanReadableCopyright</key>
     <string>Custom build for personal use</string>
+	<key>NSAppSleepDisabled</key>
+	<true/>
+	<key>LSAppNapIsDisabled</key>
+	<true/>
 </dict>
 </plist>

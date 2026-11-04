@@ -691,7 +691,13 @@ func isSingleScreenConf(_ attrs: [[String: Any]]) -> Bool {
 let desktopRootPath = NSString(string: "~/Desktop/").expandingTildeInPath + "/"
 func isDesktopItem(_ it: [String: Any]) -> Bool {
     guard let n = it["name"] as? String else { return false }
-    return n.hasPrefix(desktopRootPath)
+    guard n.hasPrefix(desktopRootPath) else { return false }
+    // 排除 iCloud 未下载占位符（.文件名.icloud）：这类"幽灵文件"各机不一致，
+    // 参与同步会占用格子且跨机匹配不上，纯噪声
+    let base = (n as NSString).lastPathComponent
+    if base.hasSuffix(".icloud") { return false }
+    if base.hasPrefix(".") && base != ".localized" { return false }   // 隐藏文件
+    return true
 }
 
 
