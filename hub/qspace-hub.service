@@ -1,0 +1,16 @@
+[Unit]
+Description=QSpace Layout Hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jon113
+ExecStart=/usr/bin/python3 /home/jon113/qspace-hub/hub.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/home/jon113/qspace-hub/hub.out
+StandardError=append:/home/jon113/qspace-hub/hub.out
+
+[Install]
+WantedBy=multi-user.target
