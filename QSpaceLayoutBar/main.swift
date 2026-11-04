@@ -946,9 +946,20 @@ func broadcastIfNeeded() {
     let recent = (st["recentBroadcasts"] as? [Int] ?? []).filter { now - $0 < 60 }
     if recent.count >= 8 { logLine("sync: 风暴保护，暂停上报"); return }
 
+    // ⭐ 上报前自检：布局有同格重叠/越界就拒绝上报，避免把脏数据推进中枢被全机队复制
+    let gitems = snap["items"] as? [[String: Any]] ?? []
+    var cellCount: [String: Int] = [:]
+    for it in gitems {
+        if let c = it["col"] as? Int, let r = it["row"] as? Int { cellCount["\(c),\(r)", default: 0] += 1 }
+    }
+    let dupCells = cellCount.values.filter { $0 > 1 }.count
+    if dupCells > 0 {
+        logLine("sync: 上报自检失败（\(dupCells) 个格重叠），拒绝上报以免污染中枢")
+        return
+    }
     snap["syncAt"] = now
     snap["sourceMachine"] = machineTag
-    let items = (snap["items"] as? [[String: Any]])?.count ?? 0
+    let items = gitems.count
     let resp = hubPost(body: snap)
 
     guard let resp = resp else {
