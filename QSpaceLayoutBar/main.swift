@@ -60,8 +60,21 @@ func loadConf() -> [String: Any]? {
 }
 
 func writeConf(_ conf: [String: Any]) {
-    guard let data = try? JSONSerialization.data(withJSONObject: conf, options: [.prettyPrinted]) else { return }
-    try? data.write(to: URL(fileURLWithPath: confPath))
+    guard let data = try? JSONSerialization.data(withJSONObject: conf, options: [.prettyPrinted]) else {
+        logLine("writeConf: 序列化失败，未写入")
+        return
+    }
+    // 原子写：先写临时文件再 rename，避免写一半崩溃损坏 QSpace 真源
+    let tmp = confPath + ".tmp"
+    do {
+        try data.write(to: URL(fileURLWithPath: tmp), options: .atomic)
+        _ = try FileManager.default.replaceItemAt(URL(fileURLWithPath: confPath),
+                                                  withItemAt: URL(fileURLWithPath: tmp))
+    } catch {
+        // 回退：直接写（老路径），并记录错误
+        do { try data.write(to: URL(fileURLWithPath: confPath), options: .atomic) }
+        catch { logLine("writeConf: 写入失败 \(error)") }
+    }
 }
 
 /// 同步枚举（只允许后台线程调用；iCloud 目录枚举可能阻塞主线程）
@@ -93,38 +106,6 @@ func qspaceRunning() -> Bool {
     return !NSRunningApplication.runningApplications(withBundleIdentifier: "com.jinghaoshe.qspace.pro").isEmpty
 }
 
-func restartQSpace() {
-    let config = NSWorkspace.OpenConfiguration()
-    if let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.jinghaoshe.qspace.pro").first {
-        app.terminate()
-        for _ in 0..<25 {
-            Thread.sleep(forTimeInterval: 0.2)
-            if app.isTerminated { break }
-        }
-        if !app.isTerminated {
-            // 优雅退出超时：强杀兜底（否则 open 会被系统忽略）
-            logLine("restartQSpace: graceful quit timed out, force terminating")
-            app.forceTerminate()
-            for _ in 0..<25 {
-                Thread.sleep(forTimeInterval: 0.2)
-                if app.isTerminated { break }
-            }
-        }
-    }
-    Thread.sleep(forTimeInterval: 1)
-    NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: qspaceApp),
-                                       configuration: config,
-                                       completionHandler: nil)
-    Thread.sleep(forTimeInterval: 4)
-    if !qspaceRunning() {
-        logLine("restartQSpace: not running after first open, retrying")
-        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: qspaceApp),
-                                           configuration: config,
-                                           completionHandler: nil)
-        Thread.sleep(forTimeInterval: 4)
-    }
-    logLine("restartQSpace: done, running=\(qspaceRunning())")
-}
 
 /// 原子写 conf：先退出 QSpace（防内存回写覆盖）→ 写 → 重启 QSpace → 轮询等起来
 /// 全程快速轮询（0.15~0.2s 步进），总耗时压在 4 秒内
@@ -159,6 +140,13 @@ func atomicWriteConfAndRestartQSpace(_ conf: [String: Any]) {
 
 func logLine(_ msg: String) {
     let line = "\(Date()): \(msg)\n"
+    // 简单轮转：超过 5MB 归档为 app.log.1（只留 1 份）
+    if let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
+       let size = attrs[.size] as? Int, size > 5 * 1024 * 1024 {
+        let old = logPath + ".1"
+        try? FileManager.default.removeItem(atPath: old)
+        try? FileManager.default.moveItem(atPath: logPath, toPath: old)
+    }
     if let handle = FileHandle(forWritingAtPath: logPath) {
         handle.seekToEndOfFile()   // FileHandle 默认 offset=0，必须 seek 到末尾，否则每次覆盖日志
         handle.write(line.data(using: .utf8)!)
@@ -242,22 +230,6 @@ func saveLayout(named name: String, isAuto: Bool = false) {
     if !isAuto { notify("已保存布局「\(name)」（\(fp)）") }
 }
 
-func pruneAutoSnapshots() {
-    let autos = layoutURLs().compactMap { url -> (URL, Date)? in
-        guard let d = FileManager.default.contents(atPath: url.path),
-              let s = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              (s["isAuto"] as? Bool) == true,
-              (s["name"] as? String)?.hasPrefix(machinePrefix) == true else { return nil }  // 跨机共享目录：只清理本机的自动快照
-        let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? nil
-        return (url, mtime ?? Date.distantPast)
-    }
-    guard autos.count > maxAutoSnapshots else { return }
-    let sorted = autos.sorted { $0.1 < $1.1 }
-    for (url, _) in sorted.prefix(autos.count - maxAutoSnapshots) {
-        try? FileManager.default.removeItem(at: url)
-    }
-    refreshLayoutsAsync()
-}
 
 // MARK: - 布局恢复（容错铁律：绝不报错刷屏，绝不因文件增删停工）
 
@@ -265,27 +237,6 @@ func pruneAutoSnapshots() {
 // MARK: - 时光机（Desktop OK 式自动快照）
 
 /// 计算两组图标属性的差异率（0.0~1.0）：位置变化 + 新增 + 删除，除以总数
-func changeRatio(between a: [[String: Any]], and b: [[String: Any]]) -> Double {
-    func posMap(_ arr: [[String: Any]]) -> [String: [Int]] {
-        var m: [String: [Int]] = [:]
-        for item in arr {
-            guard let n = item["name"] as? String else { continue }
-            m[n] = [item["x"] as? Int ?? -1, item["y"] as? Int ?? -1]
-        }
-        return m
-    }
-    let am = posMap(a), bm = posMap(b)
-    let all = Set(am.keys).union(bm.keys)
-    guard !all.isEmpty else { return 0 }
-    var changed = 0
-    for n in all {
-        switch (am[n], bm[n]) {
-        case (.some(let x), .some(let y)): if x != y { changed += 1 }
-        default: changed += 1  // 一方缺失 = 新增或删除
-        }
-    }
-    return Double(changed) / Double(all.count)
-}
 
 /// 时光机监测：三规则 + 防冗余，决定是否自动存一条新快照
 func monitorLayoutChanges() {
@@ -503,11 +454,11 @@ struct GridSpec {
     let font: Int
 }
 
-let SPEC_A = GridSpec(key: "A", cols: 21, rows: 9, topRight: 9, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
+let SPEC_A = GridSpec(key: "A", cols: 20, rows: 9, topRight: 9, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
                        x0: 80, y0: 44, colStep: 79, rowStep: 114, lod: 64, hSp: 11, font: 11)
-let SPEC_B = GridSpec(key: "B", cols: 19, rows: 9, topRight: 8, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
+let SPEC_B = GridSpec(key: "B", cols: 18, rows: 9, topRight: 8, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
                        x0: 53, y0: 43, colStep: 90, rowStep: 114, lod: 64, hSp: 22, font: 11)
-let SPEC_C = GridSpec(key: "C", cols: 22, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7,
+let SPEC_C = GridSpec(key: "C", cols: 21, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7,
                        x0: 120, y0: 40, colStep: 113, rowStep: 148, lod: 96, hSp: 11, font: 11)
 let SPEC_ALL: [String: GridSpec] = ["A": SPEC_A, "B": SPEC_B, "C": SPEC_C]
 
@@ -610,21 +561,23 @@ let calibrationPoints: [CalPoint] = [
 ]
 
 func runMappingSelfTest() -> Bool {
-    var total = 0, pass = 0
+    var total = 0, pass = 0, skipped = 0
     let pairs = [("A", "B"), ("A", "C"), ("B", "C")]
     for p in calibrationPoints {
         for (sk, dk) in pairs {
             guard let s = SPEC_ALL[sk], let d = SPEC_ALL[dk] else { continue }
             let src: (Int, Int) = sk == "A" ? p.a : (sk == "B" ? p.b : p.c)
             let dst: (Int, Int) = dk == "B" ? p.b : p.c
+            // 列数收敛到安全值后，原标定里的最右列点已超出可用网格，跳过（记录数量便于核对）
+            if src.0 > s.cols || dst.0 > d.cols { skipped += 1; continue }
             let got = mapCell(from: s, to: d, col: src.0, row: src.1)
             total += 1
             if got == dst { pass += 1 }
             else { logLine("selftest FAIL \(sk)->\(dk) #\(p.n) \(src) -> \(got) expect \(dst)") }
         }
     }
-    logLine("selftest: \(pass)/\(total) 吻合")
-    return pass == total
+    logLine("selftest: \(pass)/\(total) 吻合（跳过超界点 \(skipped) 个）")
+    return pass == total && total > 0
 }
 
 // MARK: - 快照 v2：网格化（像素 ↔ 格）+ 布局指纹
@@ -662,9 +615,10 @@ func screenGroups(_ attrs: [[String: Any]]) -> [ScreenGroup] {
 }
 
 func specForSize(_ w: Int, _ h: Int) -> GridSpec? {
-    if w == 1710 && h == 1073 { return SPEC_A }   // Air 内置
-    if w == 1728 && h == 1084 { return SPEC_B }   // MBP 内置
-    if w >= 2400 { return SPEC_C }                 // 2560×1440 外接 / Studio 虚拟屏
+    // 容差匹配：菜单栏/缩放/系统版本会让高度差几十像素，精确相等会漏配并落到兜底误判
+    if w >= 2400 { return SPEC_C }                        // 2560×1440 外接 / Studio 虚拟屏
+    if abs(w - 1710) <= 40 { return SPEC_A }              // Air 内置
+    if abs(w - 1728) <= 40 { return SPEC_B }              // MBP 内置
     return nil
 }
 
@@ -678,19 +632,18 @@ func localGridContext(attrs: [[String: Any]]) -> (screen: ScreenGroup, spec: Gri
     case "Air": return (g, SPEC_A)
     case "Studio": return (g, SPEC_C)
     default:
-        let hasBuiltin = NSScreen.screens.contains { s in
-            guard let id = s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return false }
-            return CGDisplayIsBuiltin(id) != 0
-        }
-        return (g, (hasBuiltin && NSScreen.screens.count == 1) ? SPEC_B : SPEC_C)
+        // 兜底：按"承载图标最多的那块屏"的宽度判断（不再看 screens.count，
+        // 双屏时 count==2 会误判成 C，把内屏图标按外接参数排 → 溢出）
+        return (g, g.width >= 2400 ? SPEC_C : (machineTag == "Air" ? SPEC_A : SPEC_B))
     }
 }
 
 /// 单屏判断（不依赖 NSScreen，可在后台线程用）：有效尺寸的屏组只有一种 = 单屏态
 /// 注意过滤 width/height=0 的异常组（如 QSpace 偶发的 screen=29 残留），否则会误判多屏
 func isSingleScreenConf(_ attrs: [[String: Any]]) -> Bool {
-    let groups = screenGroups(attrs).filter { $0.width > 0 && $0.height > 0 }
-    return Set(groups.map { "\($0.width)x\($0.height)" }).count <= 1
+    // 按"实际有图标的屏组数"判断：用尺寸集合会在两块同分辨率外接屏时误判为单屏
+    let groups = screenGroups(attrs).filter { $0.width > 0 && $0.height > 0 && $0.count > 0 }
+    return groups.count <= 1
 }
 
 /// 实测校准：x0/y0 = 目标屏最小坐标；step = 相邻差最小值众数（>20px 过滤杂值）
@@ -701,26 +654,6 @@ func isDesktopItem(_ it: [String: Any]) -> Bool {
     return n.hasPrefix(desktopRootPath)
 }
 
-func calibrateGrid(_ attrs: [[String: Any]], screenId: String) -> (x0: Double, y0: Double, stepX: Double, stepY: Double)? {
-    let singleScreen = isSingleScreenConf(attrs)
-    let items = attrs.filter {
-        isDesktopItem($0) && (singleScreen || (($0["screen"].map { "\($0)" }) ?? "1") == screenId)
-    }
-    let xs = items.compactMap { ($0["x"] as? NSNumber)?.doubleValue }
-    let ys = items.compactMap { ($0["y"] as? NSNumber)?.doubleValue }
-    guard let minX = xs.min(), let minY = ys.min() else { return nil }
-    func infer(_ v: [Double], fallback: Double) -> Double {
-        let s = Array(Set(v.map { $0.rounded() })).sorted()
-        guard s.count >= 2 else { return fallback }
-        let ds = zip(s, s.dropFirst()).map { $1 - $0 }.filter { $0 > 20 }
-        guard !ds.isEmpty else { return fallback }
-        let mn = ds.min()!
-        let cand = ds.filter { $0 <= mn * 1.2 }
-        let avg = cand.reduce(0, +) / Double(cand.count)
-        return avg > 20 ? avg : fallback
-    }
-    return (minX, minY, infer(xs, fallback: 90), infer(ys, fallback: 114))
-}
 
 /// 生成网格化快照（v2）：只收目标屏图标（单屏机器：所有图标归一，忽略历史 screen 编号）
 /// 用写死的 spec 参数换算（不再从坐标反推，消除步长误差）
@@ -802,13 +735,26 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
         let oc = ox >= 0 ? Int(((Double(ox) - dst.x0) / dst.colStep).rounded()) + 1 : -1
         let orow = oy >= 0 ? Int(((Double(oy) - dst.y0) / dst.rowStep).rounded()) + 1 : -1
         var (dc, dr) = mapCell(from: src, to: dst, col: c, row: r)
-        if ox >= 0 && oc == dc && orow == dr {
-            // 原格 == 计算格：原位不动（自定义禁区标定误差不应推移既有图标）
+        // 标准格位的目标像素（无论是否"原位"都以它为准）
+        let stdX = Int((dst.x0 + Double(dc - 1) * dst.colStep).rounded())
+        let stdY = Int((dst.y0 + Double(dr - 1) * dst.rowStep).rounded())
+        // 原位保留的严格条件：格号一致 **且** 像素偏差 ≤3px **且** 不越界。
+        // 只看格号会把 B 套遗留的 90px 间距、历史偏移的脏坐标（如 2505 vs 标准 2493）固化，
+        // 造成"同列两种 x / 行内间距小于图标宽"的可见重叠。
+        let pixelClean = ox >= 0 && abs(ox - stdX) <= 3 && abs(oy - stdY) <= 3
+        let inBounds = ox <= ctx.screen.width - dst.lod && oy <= ctx.screen.height - dst.lod
+        let dbg = CommandLine.arguments.contains("--applydebug")
+        if dbg {
+            print("DBG \(name.split(separator: "/").last ?? "") src(\(c),\(r)) map->(\(dc),\(dr)) oc/orow=(\(oc),\(orow)) pxClean=\(pixelClean) inBounds=\(inBounds) usedHas=\(used.contains("\(dc),\(dr)"))")
+        }
+        // ⚠️ 必须带 !used.contains：否则同一格的两个图标都走"原位保留"，坐标完全相同 → 完全重叠
+        if oc == dc && orow == dr && pixelClean && inBounds && !used.contains("\(dc),\(dr)") {
             used.insert("\(dc),\(dr)")
             ni["x"] = ox; ni["y"] = oy
         } else {
             // 目标格被占用 / 撞禁区 → 行内右推，行末下行
             var g = 0
+            let startDc = dc, startDr = dr
             while used.contains("\(dc),\(dr)") || cellBlocked(dst, dc, dr) {
                 dc += 1
                 if dc > dst.cols { dc = 1; dr += 1 }
@@ -816,10 +762,20 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
                 g += 1
                 if g > 500 { break }
             }
+            if dbg {
+                print("DBG-ELSE \(name.split(separator: "/").last ?? "") start=(\(startDc),\(startDr)) end=(\(dc),\(dr)) loops=\(g) drOk=\(dr <= dst.rows)")
+            }
             if dr <= dst.rows {
                 used.insert("\(dc),\(dr)")
-                let nx = Int((dst.x0 + Double(dc - 1) * dst.colStep).rounded())
+                var fx = dc
+                var nx = Int((dst.x0 + Double(fx - 1) * dst.colStep).rounded())
                 let ny = Int((dst.y0 + Double(dr - 1) * dst.rowStep).rounded())
+                // 最右列完整放下：越界则左移（配合列数收敛到安全值，双保险）
+                var guardCount = 0
+                while nx > ctx.screen.width - dst.lod && fx > 1 && guardCount < 5 {
+                    fx -= 1; guardCount += 1
+                    nx = Int((dst.x0 + Double(fx - 1) * dst.colStep).rounded())
+                }
                 ni["x"] = nx; ni["y"] = ny
                 if oc != dc || orow != dr {
                     moved += 1
@@ -949,6 +905,17 @@ func broadcastIfNeeded() {
     guard !fp.isEmpty else { return }
     let now = Int(Date().timeIntervalSince1970)
     var st = loadSyncState()
+    // ⭐ 吸收期（应用远端 + QSpace 重启重排期间）：把当前指纹持续记为"已知"，绝不上报。
+    //    否则 QSpace 排完盘产生的指纹变化会被当成用户拖动 → 覆盖中枢 → 其他机器再应用 → 死循环
+    let supUntil = max(suppressUntil, st["suppressBroadcastUntil"] as? Int ?? 0)
+    if now < supUntil {
+        if fp != (st["baselineFingerprint"] as? String ?? "") {
+            st["baselineFingerprint"] = fp
+            saveSyncState(st)
+            logLine("sync: 吸收期中，更新基线 fp=\(fp)")
+        }
+        return
+    }
     let baseline = st["baselineFingerprint"] as? String ?? ""
     let lastBC = st["lastBroadcastFingerprint"] as? String ?? ""
 
@@ -1002,6 +969,9 @@ func broadcastIfNeeded() {
         st["lastBroadcastFingerprint"] = fp
         st["lastBroadcastAt"] = now
         st["recentBroadcasts"] = recent + [now]
+        // 本机就是这份布局，同步记为"已生效"，避免下一轮 pull 把自己再应用一遍
+        st["lastAppliedFingerprint"] = fp
+        st["lastAppliedAt"] = now
     } else {
         logLine("sync: 上报被拒（中枢有更新版本 \(resp["latestSyncAt"] ?? "?")），等下一轮拉取")
         st["baselineFingerprint"] = fp   // 已知道中枢更新 → 交给拉取
@@ -1031,6 +1001,16 @@ func applyRemoteIfNewer(_ remote: [String: Any]) {
     guard let at = remote["syncAt"] as? Int,
           let fp = remote["layoutFingerprint"] as? String,
           let items = remote["items"] as? [[String: Any]], !items.isEmpty else { return }
+    let now = Int(Date().timeIntervalSince1970)
+    // 本机刚拖完（防抖期内）且中枢版本与本地不同 → 先不应用，等本地上报完
+    // 否则会把用户刚拖的图标挪回旧位置（实测 moved=2 把刚拖的 2 个图标弹回去）
+    if !forceApplyOnce && now - lastLocalChangeAt < 10 {
+        if let c0 = loadConf(), let l0 = makeGridSnapshot(conf: c0),
+           (l0["layoutFingerprint"] as? String) != fp {
+            logLine("sync: 本机刚改动，暂不应用远端（等本地上报）")
+            return
+        }
+    }
     let st = loadSyncState()
     let appliedAt = st["lastAppliedAt"] as? Int ?? 0
     let lastFp = st["lastAppliedFingerprint"] as? String ?? ""
@@ -1070,6 +1050,9 @@ func applyRemote(_ snap: [String: Any], fp: String, file: String) {
     var st = loadSyncState()
     st["lastAppliedFingerprint"] = fp
     st["lastAppliedAt"] = Int(Date().timeIntervalSince1970)
+    let absorb = Int(Date().timeIntervalSince1970) + 60
+    st["suppressBroadcastUntil"] = absorb
+    suppressUntil = absorb
     st["lastVerify"] = ["ok": v.ok, "checked": v.checked, "bad": v.bad, "total": v.total,
                         "at": Int(Date().timeIntervalSince1970), "source": src]
     if let c2 = loadConf(), let s2 = makeGridSnapshot(conf: c2) {
@@ -1095,7 +1078,12 @@ func verifyAfterApply(_ snap: [String: Any]) -> (ok: Bool, checked: Int, bad: In
     for a in aitems {
         if let n = a["name"] as? String, let c = a["col"] as? Int, let r = a["row"] as? Int { amap[n] = (c, r) }
     }
+    // 同格重叠检测：一个格出现 ≥2 个图标 = QSpace 会把它们叠在一起（用户可见的重叠）
+    var cellCount: [String: Int] = [:]
+    for (_, pos) in amap { cellCount["\(pos.0),\(pos.1)", default: 0] += 1 }
+    let overlap = cellCount.values.filter { $0 > 1 }.reduce(0) { $0 + ($1 - 1) }
     var checked = 0, bad = 0
+    if overlap > 0 { logLine("verify: 检测到 \(overlap) 个图标与同格重叠") }
     for s in sitems {
         guard let n = s["name"] as? String, let c = s["col"] as? Int, let r = s["row"] as? Int else { continue }
         guard let got = amap[n] else { continue }   // 本机还没这个文件，不判错
@@ -1107,7 +1095,8 @@ func verifyAfterApply(_ snap: [String: Any]) -> (ok: Bool, checked: Int, bad: In
         let colSame = dc == 0 && dr >= 0 && dr <= 3
         if !rowSame && !colSame { bad += 1 }
     }
-    return (bad == 0, checked, bad, sitems.count)
+    // 重叠计入失败：否则"格合法但两个图标叠在一起"会被判通过
+    return (bad == 0 && overlap == 0, checked, bad + overlap, sitems.count)
 }
 
 /// 屏幕状态（开合盖/切屏）变化 → 用新套参数强制重应用中枢最新布局
@@ -1123,6 +1112,7 @@ func checkSpecChange() {
         lastSpecKey = key
         specChangedAt = Int(Date().timeIntervalSince1970)
         forceApplyOnce = true
+        suppressUntil = 0
         var st = loadSyncState()
         st.removeValue(forKey: "lastAppliedFingerprint")
         st.removeValue(forKey: "lastAppliedAt")
@@ -1144,6 +1134,7 @@ var specChangedAt = 0          // 屏幕/套切换时刻（冷静期内不上报
 var forceApplyOnce = false     // 切套后强制重应用一次（跨套像素不同，不能靠指纹跳过）
 var hubFailStreak = 0          // 中枢连续失败次数
 var hubNextRetryAt = 0         // 下次允许重试的时刻（指数退避）
+var suppressUntil = 0          // 吸收期截止时刻：应用远端后 QSpace 会自行重排，期间只吸收不上报
 
 var syncTickCount = 0
 
@@ -1317,63 +1308,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(it)
         }
 
-        // 自动备份区（直接点击快照名即应用——本来就是二级菜单，一步到位）
-        let autos = layoutURLs().filter {
-            guard let d = FileManager.default.contents(atPath: $0.path),
-                  let s = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return false }
-            return (s["isAuto"] as? Bool) == true
-        }
-        if !autos.isEmpty {
-            let head = NSMenuItem(title: "🤖 自动备份（最近 \(autos.count) 个，点击即应用）", action: nil, keyEquivalent: "")
-            let sub = NSMenu()
-            for url in autos {
-                guard let d = FileManager.default.contents(atPath: url.path),
-                      let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
-                let name = snap["name"] as? String ?? "自动"
-                let it = NSMenuItem(title: name, action: #selector(restoreClicked(_:)), keyEquivalent: "")
-                it.target = self
-                it.representedObject = url.path
-                if name == currentLayoutName { it.state = .on }
-                sub.addItem(it)
-            }
-            head.submenu = sub
-            menu.addItem(head)
-        }
-
         menu.addItem(.separator())
 
         let saveIt = NSMenuItem(title: "💾 保存当前为布局…", action: #selector(saveClicked(_:)), keyEquivalent: "s")
         saveIt.target = self
         menu.addItem(saveIt)
 
-        let autoIt = NSMenuItem(title: "⚡️ 自动切换（屏幕变化时）", action: #selector(toggleAuto(_:)), keyEquivalent: "")
-        autoIt.target = self
-        autoIt.state = autoSwitchOn ? .on : .off
-        menu.addItem(autoIt)
-
-        let sleepBound = UserDefaults.standard.string(forKey: "sleepLayout") ?? "未绑定"
-        let sleepIt = NSMenuItem(title: "🌙 合盖方案：\(sleepBound)", action: nil, keyEquivalent: "")
-        sleepIt.submenu = buildBindMenu(kind: "sleep", current: sleepBound)
-        menu.addItem(sleepIt)
-
-        let wakeBound = UserDefaults.standard.string(forKey: "wakeLayout") ?? "未绑定"
-        let wakeIt = NSMenuItem(title: "☀️ 开盖方案：\(wakeBound)", action: nil, keyEquivalent: "")
-        wakeIt.submenu = buildBindMenu(kind: "wake", current: wakeBound)
-        menu.addItem(wakeIt)
-
         let loginIt = NSMenuItem(title: "🚀 开机自启", action: #selector(toggleLoginItem(_:)), keyEquivalent: "")
         loginIt.target = self
         loginIt.state = loginItemEnabled() ? .on : .off
         menu.addItem(loginIt)
-
-        let monitorIt = NSMenuItem(title: "⏱ 时光机监测（每 30 分钟）", action: #selector(toggleMonitor(_:)), keyEquivalent: "")
-        monitorIt.target = self
-        monitorIt.state = autoMonitorOn ? .on : .off
-        menu.addItem(monitorIt)
-
-        let nowIt = NSMenuItem(title: "⏱ 立即监测一次", action: #selector(monitorNow(_:)), keyEquivalent: "")
-        nowIt.target = self
-        menu.addItem(nowIt)
 
         let nudgeIt = NSMenuItem(title: "🔧 恢复后微拖拽纠错", action: #selector(toggleNudge(_:)), keyEquivalent: "")
         nudgeIt.target = self
