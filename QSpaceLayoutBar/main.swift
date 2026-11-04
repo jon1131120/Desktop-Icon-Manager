@@ -1136,10 +1136,7 @@ var hubFailStreak = 0          // 中枢连续失败次数
 var hubNextRetryAt = 0         // 下次允许重试的时刻（指数退避）
 var suppressUntil = 0          // 吸收期截止时刻：应用远端后 QSpace 会自行重排，期间只吸收不上报
 
-var syncTickCount = 0
-
 func runSyncCycle() {
-    syncTickCount += 1
     syncQueue.async {
         checkSpecChange()
         broadcastIfNeeded()
