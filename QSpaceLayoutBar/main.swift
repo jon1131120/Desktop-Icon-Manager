@@ -142,14 +142,18 @@ func atomicWriteConfAndRestartQSpace(_ conf: [String: Any]) {
     logLine("atomicWrite: done, running=\(qspaceRunning())")
 }
 
+var logBytesWritten: Int64 = 0   // 日志字节计数（轮转判定用，避免每次 stat）
+
 func logLine(_ msg: String) {
     let line = "\(Date()): \(msg)\n"
     // 简单轮转：超过 5MB 归档为 app.log.1（只留 1 份）
-    if let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
-       let size = attrs[.size] as? Int, size > 5 * 1024 * 1024 {
+    // 用内存计数代替每次 stat（避免每写一行都做一次文件系统调用）
+    logBytesWritten += Int64(line.utf8.count)
+    if logBytesWritten > 5 * 1024 * 1024 {
         let old = logPath + ".1"
         try? FileManager.default.removeItem(atPath: old)
         try? FileManager.default.moveItem(atPath: logPath, toPath: old)
+        logBytesWritten = 0
     }
     if let handle = FileHandle(forWritingAtPath: logPath) {
         handle.seekToEndOfFile()   // FileHandle 默认 offset=0，必须 seek 到末尾，否则每次覆盖日志
@@ -809,6 +813,13 @@ let hubCandidates = [
     "http://192.168.191.9:18878"     // ZeroTier（异地/带出门）
 ]
 let hubLayoutPath = "/layout"
+let hubTokenPath = NSString(string: "~/qspace-layouts/hub-token.txt").expandingTildeInPath
+
+/// 中枢共享密钥（与 MINIPC 的 hub-token.txt 同步；缺失时为空 → 中枢仅靠网段白名单）
+func hubToken() -> String {
+    guard let d = FileManager.default.contents(atPath: hubTokenPath) else { return "" }
+    return String(data: d, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+}
 let hubLock = NSLock()
 var hubActiveBase: String? = nil
 
@@ -830,6 +841,8 @@ func httpGetJSON(_ urlStr: String, timeout: TimeInterval = 3) -> [String: Any]? 
     guard let u = URL(string: urlStr) else { return nil }
     var req = URLRequest(url: u, timeoutInterval: timeout)
     req.httpMethod = "GET"
+    let tok = hubToken()
+    if !tok.isEmpty { req.setValue(tok, forHTTPHeaderField: "X-Hub-Token") }
     let sem = DispatchSemaphore(value: 0)
     var result: [String: Any]?
     URLSession.shared.dataTask(with: req) { data, _, _ in
@@ -846,6 +859,8 @@ func httpPostJSON(_ urlStr: String, body: [String: Any], timeout: TimeInterval =
     var req = URLRequest(url: u, timeoutInterval: timeout)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    let tok = hubToken()
+    if !tok.isEmpty { req.setValue(tok, forHTTPHeaderField: "X-Hub-Token") }
     req.httpBody = bd
     let sem = DispatchSemaphore(value: 0)
     var result: [String: Any]?
@@ -1181,6 +1196,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var busy = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: logPath),
+           let sz = attrs[.size] as? Int { logBytesWritten = Int64(sz) }
         logLine("startup: pid=\(getpid()) hub=\(hubCandidates.joined(separator: " -> ")) machine=\(machineTag)")
         let screenChangeNote = Notification.Name("NSWorkspaceDidChangeScreenParametersNotification")
         NSWorkspace.shared.notificationCenter.addObserver(
@@ -1212,13 +1229,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                if UserDefaults.standard.string(forKey: "wakeLayout") != nil {
-                    applyBoundLayout(kind: "wake", restart: true)
-                } else {
-                    autoSwitchIfNeeded()
-                }
-                monitorLayoutChanges()
+                // 唤醒后立即补一次同步（进程挂起期间中枢可能已更新）
+                // 不再调用已废弃的 applyBoundLayout / autoSwitchIfNeeded / monitorLayoutChanges
                 lastKnownFingerprint = currentFingerprint()
+                runSyncCycle()
             }
         }
         // 布局自动同步：每 3 秒一轮（广播本机 + 拉取其他机器）
@@ -1526,6 +1540,12 @@ if CommandLine.arguments.contains("--snapshottest") {
     let ok = r.moved == 0 && r.matched > 0
     print(ok ? "SNAPTEST PASS" : "SNAPTEST FAIL")
     exit(ok ? 0 : 1)
+}
+
+// 单实例保护：已在运行则直接退出（否则两个 app 各自轮询 + 各自写 conf）
+if NSRunningApplication.runningApplications(withBundleIdentifier: "com.jon1131120.qspacelayoutbar").count > 0 {
+    FileHandle.standardError.write("QSpaceLayoutBar 已在运行，本实例退出\n".data(using: .utf8)!)
+    exit(0)
 }
 
 let app = NSApplication.shared
