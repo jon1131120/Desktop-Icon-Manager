@@ -54,8 +54,12 @@ func currentFingerprint() -> String {
 }
 
 func loadConf() -> [String: Any]? {
-    guard let data = FileManager.default.contents(atPath: confPath),
-          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    guard let data = FileManager.default.contents(atPath: confPath) else { return nil }
+    guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        // conf 损坏会让所有同步静默跳过，必须留痕（否则排查时完全无线索）
+        logLine("⚠️ loadConf: desktop.conf 解析失败（文件可能损坏，同步已暂停）")
+        return nil
+    }
     return obj
 }
 
@@ -902,7 +906,11 @@ func saveSyncState(_ s: [String: Any]) {
 /// 上报本机布局到中枢（后改赢；被拒说明中枢有更新的版本，下一轮拉取）
 func broadcastIfNeeded() {
     guard autoSyncOn else { return }
-    guard let conf = loadConf(), var snap = makeGridSnapshot(conf: conf) else { return }
+    guard let conf = loadConf() else { return }
+    guard var snap = makeGridSnapshot(conf: conf) else {
+        logLine("⚠️ 快照生成失败（localGridContext 无可用屏组），本轮跳过")
+        return
+    }
     let fp = snap["layoutFingerprint"] as? String ?? ""
     guard !fp.isEmpty else { return }
     let now = Int(Date().timeIntervalSince1970)
@@ -950,6 +958,12 @@ func broadcastIfNeeded() {
 
     // ⭐ 上报前自检：布局有同格重叠/越界就拒绝上报，避免把脏数据推进中枢被全机队复制
     let gitems = snap["items"] as? [[String: Any]] ?? []
+    // ⭐ 空布局绝不上报：items 为空时 fp 仍是 fnv1a("") 非空，会把中枢清空并扩散到全机队
+    //   （触发场景：桌面被清空、conf 读到空 itemAttrs、快照逻辑异常）
+    guard !gitems.isEmpty else {
+        logLine("sync: 本机布局为空（0 个图标），拒绝上报以免清空中枢")
+        return
+    }
     var cellCount: [String: Int] = [:]
     for it in gitems {
         if let c = it["col"] as? Int, let r = it["row"] as? Int { cellCount["\(c),\(r)", default: 0] += 1 }
