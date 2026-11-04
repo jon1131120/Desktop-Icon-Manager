@@ -153,7 +153,7 @@ func atomicWriteConfAndRestartQSpace(_ conf: [String: Any]) {
         usleep(200_000)
         if qspaceRunning() { break }
     }
-    Thread.sleep(forTimeInterval: 2)  // 渲染稳定
+    Thread.sleep(forTimeInterval: 0.6)  // 渲染稳定（原 2 秒，压缩以加快同步）
     logLine("atomicWrite: done, running=\(qspaceRunning())")
 }
 
@@ -889,7 +889,76 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
 
 // MARK: - 布局自动同步引擎（iCloud 通道；防循环四闸：基线比对 / 忽略期 / 单写者 / 指纹去重 + 风暴保护）
 let syncDir = layoutDir + "/sync"
+let syncInbox = NSString(string: "~/qspace-layouts/sync-inbox").expandingTildeInPath   // SSH 直推的本地落点（加速通道）
 let syncStatePath = NSString(string: "~/qspace-layouts/sync-state.json").expandingTildeInPath
+// SSH 直推目标（按本机可用密钥；失败静默，靠 iCloud 兜底）
+let pushTargets: [String] = {
+    switch machineTag {
+    case "MBP": return ["air", "studio"]
+    case "Air": return ["mbp"]          // Air→Studio 无密钥，靠 iCloud
+    case "Studio": return ["mbp", "air"]
+    default: return []
+    }
+}()
+
+func pushToPeers(_ localPath: String) {
+    for t in pushTargets {
+        DispatchQueue.global(qos: .utility).async {
+            // 不用 subprocessOutput（它内部 shell 拼接，路径空格会被拆散）——直接 Process 参数数组
+            // 目标文件名无空格（tag-sync.json），避免远端 scp 路径空格问题
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
+            p.arguments = ["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
+                           localPath, "\(t):qspace-layouts/sync-inbox/\(machineTag)-sync.json"]
+            let pipe = Pipe()
+            p.standardError = pipe
+            p.standardOutput = pipe
+            do {
+                try p.run()
+                p.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let err = String(data: data, encoding: .utf8) ?? ""
+                logLine("push: \(t) rc=\(p.terminationStatus)\(err.isEmpty ? "" : " \(String(err.prefix(150)))")")
+            } catch {
+                logLine("push: \(t) 启动失败 \(error)")
+            }
+        }
+    }
+}
+
+/// 主动拉取对端 inbox（解决"对方推不过来"的方向性密钥缺失：Studio→Air 有密钥，Air→Studio 没有）
+let pullPeers: [(alias: String, tag: String)] = {
+    switch machineTag {
+    case "MBP": return [("air", "Air")]       // MBP 也能从 Air 拉（推的补充）
+    case "Studio": return [("air", "Air")]    // Studio 主动拉 Air（关键：Air 推不到 Studio）
+    default: return []                         // Air 是权威源，只推不拉
+    }
+}()
+
+func pullFromPeers() {
+    let dir = syncInbox
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    for peer in pullPeers {
+        DispatchQueue.global(qos: .utility).async {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/scp")
+            p.arguments = ["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
+                           "\(peer.alias):qspace-layouts/sync-inbox/\(peer.tag)-sync.json", dir + "/"]
+            let pipe = Pipe()
+            p.standardError = pipe
+            p.standardOutput = pipe
+            do {
+                try p.run()
+                p.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let err = String(data: data, encoding: .utf8) ?? ""
+                logLine("pull-from: \(peer.alias) rc=\(p.terminationStatus)\(err.isEmpty ? "" : " \(String(err.prefix(150)))")")
+            } catch {
+                logLine("pull-from: \(peer.alias) 启动失败 \(error)")
+            }
+        }
+    }
+}
 var autoSyncOn = UserDefaults.standard.object(forKey: "autoSyncOff") == nil
 // 权威机模式：设置后只有该机广播，其余机器只接收不广播（空 = 双向）
 var authorityMachine: String = UserDefaults.standard.string(forKey: "authorityMachine") ?? ""
@@ -936,6 +1005,12 @@ func broadcastIfNeeded() {
     if let d = try? JSONSerialization.data(withJSONObject: snap, options: [.prettyPrinted]) {
         try? d.write(to: URL(fileURLWithPath: url))
         logLine("sync: 广播 fp=\(fp) items=\((snap["items"] as? [[String: Any]])?.count ?? 0)")
+        // 本地 inbox 副本（无空格文件名）供对端主动拉取
+        let inboxCopy = syncInbox + "/\(machineTag)-sync.json"
+        try? FileManager.default.createDirectory(atPath: syncInbox, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(atPath: inboxCopy)
+        try? FileManager.default.copyItem(atPath: url, toPath: inboxCopy)
+        pushToPeers(inboxCopy)   // SSH 直推加速（秒级）→ 目标也是无空格文件名
     }
     st["baselineFingerprint"] = fp
     st["lastBroadcastFingerprint"] = fp
@@ -946,25 +1021,36 @@ func broadcastIfNeeded() {
 }
 
 /// 拉取：主线程执行（atomicWrite / microNudge 需要主线程 + AX 权限）
+/// 候选来源：SSH inbox（秒级）+ iCloud sync 目录（分钟级兜底），同机取 syncAt 最新
 func pullRemote() {
     guard autoSyncOn else { return }
-    guard let files = try? FileManager.default.contentsOfDirectory(atPath: syncDir) else {
-        logLine("pull: sync 目录读不到")
-        return
+    // 权威机只推不拉：本机就是权威源时不应用任何远端布局（避免被反向拉走 + QSpace 重启闪烁 + 循环变慢）
+    if !authorityMachine.isEmpty && authorityMachine == machineTag { return }
+    try? FileManager.default.createDirectory(atPath: syncInbox, withIntermediateDirectories: true)
+    var best: [String: (snap: [String: Any], fp: String, at: Int)] = [:]
+    for dir in [syncInbox, syncDir] {
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { continue }
+        for f in files where f.hasSuffix(".json") && !f.hasPrefix("[\(machineTag)]") {
+            // 权威模式：只应用权威机的文件，忽略其他机器的残留广播
+            if !authorityMachine.isEmpty && !f.contains(authorityMachine) { continue }
+            let path = dir + "/" + f
+            guard let d = FileManager.default.contents(atPath: path),
+                  let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let fp = snap["layoutFingerprint"] as? String,
+                  let at = snap["syncAt"] as? Int else { continue }
+            if let cur = best[f], cur.at >= at { continue }
+            best[f] = (snap, fp, at)
+        }
     }
     let st = loadSyncState()
     let appliedAt = st["lastAppliedAt"] as? Int ?? 0
-    let recent = st["recentFingerprints"] as? [String] ?? []
-    for f in files.sorted() where f.hasSuffix(".json") && !f.hasPrefix("[\(machineTag)]") {
-        let path = syncDir + "/" + f
-        guard let d = FileManager.default.contents(atPath: path),
-              let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              let fp = snap["layoutFingerprint"] as? String,
-              let at = snap["syncAt"] as? Int else { continue }
-        logLine("pull: 检查 \(f) fp=\(fp) at=\(at) appliedAt=\(appliedAt) recent=\(recent.contains(fp))")
-        if recent.contains(fp) || fp == (st["lastBroadcastFingerprint"] as? String) { continue }  // 闸④
-        if at <= appliedAt { continue }
-        applyRemote(snap, fp: fp, file: f)
+    let lastAppliedFp = st["lastAppliedFingerprint"] as? String ?? ""
+    for (f, c) in best.sorted(by: { $0.key < $1.key }) {
+        // 闸④：只跳过"当前已生效的指纹"和旧消息（历史指纹不再拦截，否则 A→B→A 会卡）
+        if c.fp == lastAppliedFp { continue }
+        if c.at <= appliedAt { continue }
+        logLine("pull: 应用候选 \(f) fp=\(c.fp) at=\(c.at) appliedAt=\(appliedAt)")
+        applyRemote(c.snap, fp: c.fp, file: f)
         return   // 一轮只处理一台
     }
 }
@@ -1052,6 +1138,7 @@ var recentVerifyBad: [[String: Any]] = []
 
 func runSyncCycle() {
     syncQueue.async {          // 串行化，防重入
+        pullFromPeers()        // 拉取对端 inbox（异步，秒级通道）
         broadcastIfNeeded()
         DispatchQueue.main.sync { pullRemote() }   // 应用在主线程（atomicWrite/microNudge 需要）
     }
@@ -1104,9 +1191,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lastKnownFingerprint = currentFingerprint()
             }
         }
-        // 布局自动同步：每 8 秒一轮（广播本机 + 拉取其他机器）
+        // 布局自动同步：每 3 秒一轮（广播本机 + 拉取其他机器）
         syncState = loadSyncState()
-        let syncT = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { _ in runSyncCycle() }
+        let syncT = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in runSyncCycle() }
         RunLoop.main.add(syncT, forMode: .common)
 
         // 时光机监测：启动 20 秒先跑一次，之后每 30 分钟
