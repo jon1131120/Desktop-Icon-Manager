@@ -949,17 +949,53 @@ func broadcastIfNeeded() {
     guard !fp.isEmpty else { return }
     let now = Int(Date().timeIntervalSince1970)
     var st = loadSyncState()
-    if fp == (st["baselineFingerprint"] as? String) { return }                 // 闸① 基线
-    if fp == (st["lastBroadcastFingerprint"] as? String) { return }            // 内容没变
-    if now - (st["lastAppliedAt"] as? Int ?? 0) < 15 { return }                // 闸② 忽略期（应用后 15 秒）
+    let baseline = st["baselineFingerprint"] as? String ?? ""
+    let lastBC = st["lastBroadcastFingerprint"] as? String ?? ""
+
+    // ① 只在指纹「真正变化的那一刻」刷新计时：连续拖动时每次变化都重置，停手满 10 秒才上报。
+    //    绝不能每轮无条件刷新（fp 会持续 != baseline，那样永远等不到 10 秒，实测导致永不同步）
+    if fp != lastSeenFp {
+        lastSeenFp = fp
+        if now - specChangedAt >= 20 { lastLocalChangeAt = now }   // 切套冷静期内的变化不算用户拖动
+    }
+
+    if fp == baseline { return }
+    if fp == lastBC { return }
+
+    // ② 切套冷静期：屏幕刚变（开合盖/插拔外接），本机 fp 变化不是用户改布局 —— 绝不上报，
+    //    否则会把"按新套反推的歪坐标"当成真源覆盖中枢（实测导致开合盖后不生效）
+    if now - specChangedAt < 20 { return }
+
+    // ③ 拖动防抖：停手不足 10 秒先不上报
+    if now - lastLocalChangeAt < 10 { return }
+
+    // ④ 刚应用过远端，给 15 秒忽略期
+    if now - (st["lastAppliedAt"] as? Int ?? 0) < 15 { return }
+
+    // ⑤ 网络失败退避
+    if now < hubNextRetryAt { return }
+
+    // ⑥ 风暴保护
     let recent = (st["recentBroadcasts"] as? [Int] ?? []).filter { now - $0 < 60 }
     if recent.count >= 8 { logLine("sync: 风暴保护，暂停上报"); return }
-    if let last = recent.last, now - last < 2 { return }                        // 节流 2 秒
+
     snap["syncAt"] = now
     snap["sourceMachine"] = machineTag
     let items = (snap["items"] as? [[String: Any]])?.count ?? 0
     let resp = hubPost(body: snap)
-    let accepted = (resp?["accepted"] as? Bool) ?? false
+
+    guard let resp = resp else {
+        // 网络失败：不更新 baseline，下轮自动重试（指数退避 10/20/40/60 秒）
+        hubFailStreak += 1
+        let wait = min(60, 10 << min(3, hubFailStreak - 1))
+        hubNextRetryAt = now + wait
+        logLine("sync: 上报失败（网络不可达），\(wait) 秒后重试（连续 \(hubFailStreak) 次）")
+        return
+    }
+    hubFailStreak = 0
+    hubNextRetryAt = 0
+
+    let accepted = (resp["accepted"] as? Bool) ?? false
     if accepted {
         logLine("sync: 上报中枢 ✅ 接受 fp=\(fp) items=\(items)")
         st["baselineFingerprint"] = fp
@@ -967,34 +1003,47 @@ func broadcastIfNeeded() {
         st["lastBroadcastAt"] = now
         st["recentBroadcasts"] = recent + [now]
     } else {
-        logLine("sync: 上报被拒（中枢已有更新版本 \(resp?["latestSyncAt"] ?? "?")）fp=\(fp)")
-        st["baselineFingerprint"] = fp   // 本机已知，等下一轮拉取中枢
+        logLine("sync: 上报被拒（中枢有更新版本 \(resp["latestSyncAt"] ?? "?")），等下一轮拉取")
+        st["baselineFingerprint"] = fp   // 已知道中枢更新 → 交给拉取
     }
-    syncState = st
     saveSyncState(st)
 }
 
 /// 从中枢拉取最新布局并应用（主线程）
-func pullRemote() {
-    guard autoSyncOn else { return }
-    guard let remote = hubGet() else {
-        logLine("sync: 中枢无响应（GET 失败）")
-        return
+/// 后台线程：抓取中枢最新（网络操作不占主线程，ZT 慢时也不卡菜单）
+func fetchRemote() -> [String: Any]? {
+    guard autoSyncOn else { return nil }
+    if let remote = hubGet() { return remote }
+    // 网络失败退避
+    let now = Int(Date().timeIntervalSince1970)
+    if now >= hubNextRetryAt {
+        hubFailStreak += 1
+        let wait = min(60, 10 << min(3, hubFailStreak - 1))
+        hubNextRetryAt = now + wait
+        logLine("sync: 拉取失败（网络不可达），\(wait) 秒后重试（连续 \(hubFailStreak) 次）")
     }
+    return nil
+}
+
+/// 主线程：按指纹/时间戳判断是否需要应用，需要则应用
+func applyRemoteIfNewer(_ remote: [String: Any]) {
+    guard autoSyncOn else { return }
     guard let at = remote["syncAt"] as? Int,
           let fp = remote["layoutFingerprint"] as? String,
           let items = remote["items"] as? [[String: Any]], !items.isEmpty else { return }
     let st = loadSyncState()
     let appliedAt = st["lastAppliedAt"] as? Int ?? 0
     let lastFp = st["lastAppliedFingerprint"] as? String ?? ""
-    if fp == lastFp { return }                     // 闸④ 当前生效指纹
-    if at <= appliedAt { return }                  // 旧消息
-    if let conf = loadConf(), let local = makeGridSnapshot(conf: conf),
+    if fp == lastFp && !forceApplyOnce { return }
+    if at <= appliedAt && !forceApplyOnce { return }
+    // 中枢就是本机布局 —— 但切套后必须重算（不同套的像素映射不同），不能跳
+    if !forceApplyOnce, let conf = loadConf(), let local = makeGridSnapshot(conf: conf),
        (local["layoutFingerprint"] as? String) == fp {
-        logLine("sync: 中枢即本机布局，无需应用")
         return
     }
-    logLine("sync: 拉取中枢 syncAt=\(at) source=\(remote["sourceMachine"] ?? "?") items=\(items.count) fp=\(fp)")
+    let forced = forceApplyOnce
+    forceApplyOnce = false
+    logLine("sync: 拉取中枢 syncAt=\(at) source=\(remote["sourceMachine"] ?? "?") items=\(items.count) fp=\(fp)\(forced ? " [切套强制]" : "")")
     applyRemote(remote, fp: fp, file: "hub")
 }
 
@@ -1009,7 +1058,11 @@ func applyRemote(_ snap: [String: Any], fp: String, file: String) {
     applyingRemote = true
     appDelegate?.setBusy(true)
     let src = snap["sourceMachine"] as? String ?? file
-    logLine("sync: 应用 source=\(src) spec=\(snap["specKey"] ?? "?") matched=\(r.matched) moved=\(r.moved) kept=\(r.kept)")
+    var dstKey = "?"
+    if let c0 = loadConf(), let a0 = c0["itemAttrs"] as? [[String: Any]], let ctx0 = localGridContext(attrs: a0) {
+        dstKey = ctx0.spec.key
+    }
+    logLine("sync: 应用 source=\(src) 套 \(snap["specKey"] ?? "?")→\(dstKey) matched=\(r.matched) moved=\(r.moved) kept=\(r.kept)")
     atomicWriteConfAndRestartQSpace(r.newConf)
     microNudge(conf: r.newConf)
     let v = verifyAfterApply(snap)
@@ -1066,32 +1119,42 @@ func checkSpecChange() {
     let key = ctx.spec.key
     if lastSpecKey.isEmpty { lastSpecKey = key; return }
     if key != lastSpecKey {
-        logLine("sync: 屏幕切换 \(lastSpecKey) → \(key)，强制重新应用中枢布局")
+        logLine("sync: 屏幕切换 \(lastSpecKey) → \(key)，冷静 20 秒并用新套强制重应用")
         lastSpecKey = key
+        specChangedAt = Int(Date().timeIntervalSince1970)
+        forceApplyOnce = true
         var st = loadSyncState()
         st.removeValue(forKey: "lastAppliedFingerprint")
         st.removeValue(forKey: "lastAppliedAt")
+        // 关键：把"切套后本机 fp"直接记为已知，之后不再当成用户改动上报
+        // （否则冷静期 20 秒一过，仍会把按新套反推的坐标当真源覆盖中枢）
+        if let c2 = loadConf(), let s2 = makeGridSnapshot(conf: c2) {
+            let f = s2["layoutFingerprint"] as? String ?? ""
+            st["baselineFingerprint"] = f
+            st["lastBroadcastFingerprint"] = f
+        }
         saveSyncState(st)
     }
 }
+
+// 防抖 / 冷静期 / 重试状态
+var lastLocalChangeAt = 0      // 本机布局最后变化时刻（只在 fp 真正变化时刷新）
+var lastSeenFp = ""            // 上一轮看到的本机指纹（用于判断"这一刻变了"）
+var specChangedAt = 0          // 屏幕/套切换时刻（冷静期内不上报，防止污染中枢）
+var forceApplyOnce = false     // 切套后强制重应用一次（跨套像素不同，不能靠指纹跳过）
+var hubFailStreak = 0          // 中枢连续失败次数
+var hubNextRetryAt = 0         // 下次允许重试的时刻（指数退避）
 
 var syncTickCount = 0
 
 func runSyncCycle() {
     syncTickCount += 1
-    if syncTickCount <= 3 { logLine("sync: tick #\(syncTickCount)") }
-    let trace = syncTickCount <= 2
     syncQueue.async {
-        if trace { logLine("sync[1] block 开始") }
         checkSpecChange()
-        if trace { logLine("sync[2] specCheck 完成") }
         broadcastIfNeeded()
-        if trace { logLine("sync[3] broadcast 完成") }
-        DispatchQueue.main.sync {
-            if trace { logLine("sync[4] 进入 main，执行 pullRemote") }
-            pullRemote()
-            if trace { logLine("sync[5] pullRemote 完成") }
-        }
+        let remote = fetchRemote()          // 网络在后台线程
+        guard let r = remote else { return }
+        DispatchQueue.main.sync { applyRemoteIfNewer(r) }
     }
 }
 
@@ -1145,7 +1208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // 布局自动同步：每 3 秒一轮（广播本机 + 拉取其他机器）
         syncState = loadSyncState()
-        let syncT = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in runSyncCycle() }
+        let syncT = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in runSyncCycle() }
         RunLoop.main.add(syncT, forMode: .common)
 
         // 时光机监测：启动 20 秒先跑一次，之后每 30 分钟
