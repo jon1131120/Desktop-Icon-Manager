@@ -170,7 +170,39 @@ func alert(_ msg: String) {
     a.runModal()
 }
 
+// 通知去重：同来源 60 秒内只弹一次（频繁拖动时通知会连成一片）
+var lastNotifyAt: [String: Date] = [:]
+var lastNotifyLock = NSLock()
+
+/// 带去重键的通知（同一来源短时间内只弹一次）
+func notifyUnique(_ key: String, _ msg: String) {
+    lastNotifyLock.lock()
+    let now = Date()
+    if let prev = lastNotifyAt[key], now.timeIntervalSince(prev) < 60 {
+        lastNotifyLock.unlock()
+        return
+    }
+    lastNotifyAt[key] = now
+    if lastNotifyAt.count > 32 { lastNotifyAt.removeAll() }
+    lastNotifyLock.unlock()
+    notifyRaw(msg)
+}
+
 func notify(_ msg: String) {
+    lastNotifyLock.lock()
+    let key = String(msg.prefix(24))
+    let now = Date()
+    if let prev = lastNotifyAt[key], now.timeIntervalSince(prev) < 60 {
+        lastNotifyLock.unlock()
+        return
+    }
+    lastNotifyAt[key] = now
+    if lastNotifyAt.count > 32 { lastNotifyAt.removeAll() }
+    lastNotifyLock.unlock()
+    notifyRaw(msg)
+}
+
+func notifyRaw(_ msg: String) {
     let n = NSUserNotification()
     n.title = "QSpace 布局"
     n.informativeText = msg
@@ -680,13 +712,15 @@ func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
               let y = (it["y"] as? NSNumber)?.doubleValue else { continue }
         let col = Int(((x - spec.x0) / spec.colStep).rounded()) + 1
         let row = Int(((y - spec.y0) / spec.rowStep).rounded()) + 1
-        gridItems.append(["name": name,
+        // 脱敏：中枢只存「文件名」，不存完整绝对路径（避免泄露用户目录结构 / 敏感文件名）
+        let fileName = (name as NSString).lastPathComponent
+        gridItems.append(["name": fileName,
                           "col": max(1, min(spec.cols, col)),
                           "row": max(1, min(spec.rows, row))])
     }
     let fpStr = gridItems
         .sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
-        .map { "\($0["name"] as? String ?? ""):\($0["col"] as? Int ?? 0),\($0["row"] as? Int ?? 0)" }
+        .map { "\(($0["name"] as? String ?? "").split(separator: "/").last.map(String.init) ?? ""):\($0["col"] as? Int ?? 0),\($0["row"] as? Int ?? 0)" }
         .joined(separator: "|")
     var settings: [String: Any] = [:]
     for (k, v) in conf where k != "itemAttrs" { settings[k] = v }
@@ -720,19 +754,23 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
         let counts = vals.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
         return counts.max { $0.value < $1.value }?.key ?? "1"
     }()
+    // 上报方只给文件名；本机按「桌面根路径 + 文件名」还原匹配
     var byName: [String: (Int, Int)] = [:]
     for g in gridItems {
         guard let n = g["name"] as? String, let c = g["col"] as? Int, let r = g["row"] as? Int else { continue }
-        byName[n] = (c, r)
+        byName[desktopRootPath + n] = (c, r)
+        byName[n] = (c, r)          // 兼容旧版（带完整路径）的快照
     }
     var out: [[String: Any]] = []
     var matched = 0, kept = 0, moved = 0
     var used = Set<String>()
     for it in attrs {
         var ni = it
-        let name = it["name"] as? String ?? ""
+        let fullName = it["name"] as? String ?? ""
+        let name = (fullName as NSString).lastPathComponent   // 脱敏后中枢只给文件名 → 按文件名匹配
         let sid = (it["screen"].map { "\($0)" }) ?? "1"
-        guard isDesktopItem(it), (singleScreen || sid == ctx.screen.screenId), let (c, r) = byName[name] else {
+        guard isDesktopItem(it), (singleScreen || sid == ctx.screen.screenId),
+              let (c, r) = byName[name] ?? byName[fullName] else {
             out.append(ni)
             kept += 1
             continue
@@ -872,6 +910,12 @@ func httpPostJSON(_ urlStr: String, body: [String: Any], timeout: TimeInterval =
     return result
 }
 
+/// 取中枢服务器时间（用于时钟超前时校准）
+func hubServerTime() -> Int? {
+    guard let o = httpGetJSON("/status"), let t = o["serverTime"] as? Int else { return nil }
+    return t
+}
+
 /// 从中枢拉取（LAN 失败自动切 ZT）
 func hubGet(_ path: String = hubLayoutPath) -> [String: Any]? {
     let bases = hubBases()
@@ -991,7 +1035,16 @@ func broadcastIfNeeded() {
     snap["syncAt"] = now
     snap["sourceMachine"] = machineTag
     let items = gitems.count
-    let resp = hubPost(body: snap)
+    var resp = hubPost(body: snap)
+
+    // 时钟超前自愈：中枢拒收（400 syncAt too far in future）→ 用中枢服务器时间重发一次
+    if let r = resp, (r["error"] as? String ?? "").contains("future") {
+        if let hubTime = hubServerTime() {
+            logLine("sync: 本机时钟超前（中枢时间 \(hubTime)），用中枢时间重发")
+            snap["syncAt"] = hubTime + 1
+            resp = hubPost(body: snap)
+        }
+    }
 
     guard let resp = resp else {
         // 网络失败：不更新 baseline，下轮自动重试（指数退避 10/20/40/60 秒）
@@ -1104,7 +1157,7 @@ func applyRemote(_ snap: [String: Any], fp: String, file: String) {
     applyingRemote = false
     appDelegate?.setBusy(false)
     appDelegate?.rebuildMenu()
-    notify(v.ok
+    notifyUnique("sync:\(src)", v.ok
         ? "已同步「\(src)」布局（\(r.moved) 个归位，校验通过 \(v.checked) 个）"
         : "⚠️ 同步「\(src)」完成但校验不通过：\(v.bad)/\(v.total)（详见日志）")
 }
@@ -1118,7 +1171,10 @@ func verifyAfterApply(_ snap: [String: Any]) -> (ok: Bool, checked: Int, bad: In
           let aitems = actual["items"] as? [[String: Any]] else { return (false, 0, 0, 0) }
     var amap: [String: (Int, Int)] = [:]
     for a in aitems {
-        if let n = a["name"] as? String, let c = a["col"] as? Int, let r = a["row"] as? Int { amap[n] = (c, r) }
+        if let n = a["name"] as? String, let c = a["col"] as? Int, let r = a["row"] as? Int {
+            amap[(n as NSString).lastPathComponent] = (c, r)
+            amap[n] = (c, r)
+        }
     }
     // 同格重叠检测：一个格出现 ≥2 个图标 = QSpace 会把它们叠在一起（用户可见的重叠）
     var cellCount: [String: Int] = [:]
@@ -1127,7 +1183,8 @@ func verifyAfterApply(_ snap: [String: Any]) -> (ok: Bool, checked: Int, bad: In
     var checked = 0, bad = 0
     if overlap > 0 { logLine("verify: 检测到 \(overlap) 个图标与同格重叠") }
     for s in sitems {
-        guard let n = s["name"] as? String, let c = s["col"] as? Int, let r = s["row"] as? Int else { continue }
+        guard let n0 = s["name"] as? String, let c = s["col"] as? Int, let r = s["row"] as? Int else { continue }
+        let n = (n0 as NSString).lastPathComponent
         guard let got = amap[n] else { continue }   // 本机还没这个文件，不判错
         checked += 1
         if cellBlocked(dst, got.0, got.1) { bad += 1; continue }
@@ -1280,6 +1337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if current == "未绑定" { none.state = .on }
         sub.addItem(none)
         sub.addItem(.separator())
+        var bound = 0
         for url in layoutURLs() {
             guard let d = FileManager.default.contents(atPath: url.path),
                   let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
@@ -1290,6 +1348,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             it.representedObject = ["kind": kind, "name": name]
             if name == current { it.state = .on }
             sub.addItem(it)
+            bound += 1
+        }
+        if bound == 0 {
+            let hint = NSMenuItem(title: "（暂无可绑定的方案）", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            sub.addItem(hint)
         }
         return sub
     }
@@ -1329,6 +1393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         // 手动方案（子菜单：应用/重命名/删除）
+        var manualCount = 0
         for url in layoutURLs() {
             guard let d = FileManager.default.contents(atPath: url.path),
                   let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
@@ -1349,6 +1414,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sub.addItem(apply); sub.addItem(.separator()); sub.addItem(ren); sub.addItem(del)
             it.submenu = sub
             menu.addItem(it)
+            manualCount += 1
+        }
+        if manualCount == 0 {
+            // 没有可用方案时给出明确说明（而不是让菜单项静默失效）
+            let hint = NSMenuItem(title: "（暂无手动保存的布局，可用下方「保存当前为布局…」创建）", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            menu.addItem(hint)
         }
 
         menu.addItem(.separator())
