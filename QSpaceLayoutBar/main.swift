@@ -419,9 +419,15 @@ func autoSwitchIfNeeded() {
 
 func microNudge(conf: [String: Any]) {
     guard microNudgeOn else { logLine("nudge: 已关闭,跳过"); return }
-    guard AXIsProcessTrusted() else {
-        logLine("nudge: 无辅助功能权限,跳过并提示")
-        notify("微拖拽纠错需要授权一次：系统设置 → 隐私与安全性 → 辅助功能 → 勾选 QSpaceLayoutBar")
+    // 系统标准授权弹窗：首次会弹出"QSpaceLayoutBar 想控制此电脑"，并自动把 app 加入辅助功能列表
+    let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+    let trusted = AXIsProcessTrustedWithOptions(opts)
+    guard trusted else {
+        logLine("nudge: 无辅助功能权限,已弹系统授权框并打开设置面板")
+        DispatchQueue.main.async {
+            subprocessRun(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
+        }
+        notify("请在系统设置→隐私与安全性→辅助功能里勾选 QSpaceLayoutBar，然后重新点一次恢复")
         return
     }
     guard let attrs = conf["itemAttrs"] as? [[String: Any]],
