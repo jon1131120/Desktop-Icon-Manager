@@ -351,13 +351,27 @@ func restoreLayout(at url: URL, restart: Bool = true) {
     let snapIndex = Dictionary(snapAttrs.map { ($0["name"] as? String ?? "", $0) },
                                uniquingKeysWith: { _, new in new })
 
-    var matched = 0, keptNew = 0
+    // 跨机应用防错位：目标机只有一块屏时，快照的屏幕编号（本机显示器序号，跨机语义不同）全部归一化为本机屏幕编号
+    // 例：MBP 快照含 screen 1/2/3（历史多屏编号），单屏 Mac Studio 不认 2/3，图标会被指到不存在的屏幕导致乱排
+    let singleScreenTarget = NSScreen.screens.count == 1
+    let localScreenMode: String = {
+        let vals = curAttrs.compactMap { $0["screen"].map { "\($0)" } }
+        let counts = vals.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
+        return counts.max { $0.value < $1.value }?.key ?? "1"
+    }()
+    var matched = 0, keptNew = 0, screenFixed = 0
     var newAttrs: [[String: Any]] = []
     for item in curAttrs {
         let key = item["name"] as? String ?? ""
         if let s = snapIndex[key] {
             var ni = item
-            ni["x"] = s["x"]; ni["y"] = s["y"]; ni["screen"] = s["screen"]
+            ni["x"] = s["x"]; ni["y"] = s["y"]
+            if singleScreenTarget {
+                if let sv = s["screen"], "\(sv)" != localScreenMode { screenFixed += 1 }
+                ni["screen"] = localScreenMode
+            } else {
+                ni["screen"] = s["screen"]
+            }
             newAttrs.append(ni)
             matched += 1
         } else {
@@ -383,7 +397,8 @@ func restoreLayout(at url: URL, restart: Bool = true) {
         microNudge(conf: conf)  // 重启后微拖拽 1px，触发 QSpace snapToGrid 自动纠错
         appDelegate?.setBusy(false)
         appDelegate?.rebuildMenu()
-        notify("已恢复「\(currentLayoutName)」：匹配 \(matched) 个, 保留新增 \(keptNew) 个（设置已还原）")
+        let fixInfo = screenFixed > 0 ? "，屏幕编号归一 \(screenFixed) 个" : ""
+        notify("已恢复「\(currentLayoutName)」：匹配 \(matched) 个, 保留新增 \(keptNew) 个（设置已还原\(fixInfo)）")
     } else {
         writeConf(conf)
     }
