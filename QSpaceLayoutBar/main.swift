@@ -454,11 +454,11 @@ struct GridSpec {
     let font: Int
 }
 
-let SPEC_A = GridSpec(key: "A", cols: 20, rows: 9, topRight: 9, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
+let SPEC_A = GridSpec(key: "A", cols: 21, rows: 9, topRight: 9, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
                        x0: 80, y0: 44, colStep: 79, rowStep: 114, lod: 64, hSp: 11, font: 11)
-let SPEC_B = GridSpec(key: "B", cols: 18, rows: 9, topRight: 8, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
+let SPEC_B = GridSpec(key: "B", cols: 19, rows: 9, topRight: 8, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
                        x0: 53, y0: 43, colStep: 90, rowStep: 114, lod: 64, hSp: 22, font: 11)
-let SPEC_C = GridSpec(key: "C", cols: 21, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7,
+let SPEC_C = GridSpec(key: "C", cols: 22, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7,
                        x0: 120, y0: 40, colStep: 113, rowStep: 148, lod: 96, hSp: 11, font: 11)
 let SPEC_ALL: [String: GridSpec] = ["A": SPEC_A, "B": SPEC_B, "C": SPEC_C]
 
@@ -569,7 +569,7 @@ func runMappingSelfTest() -> Bool {
             let src: (Int, Int) = sk == "A" ? p.a : (sk == "B" ? p.b : p.c)
             let dst: (Int, Int) = dk == "B" ? p.b : p.c
             // 列数收敛到安全值后，原标定里的最右列点已超出可用网格，跳过（记录数量便于核对）
-            if src.0 > s.cols || dst.0 > d.cols { skipped += 1; continue }
+            // 列数已恢复到标定值，全部标定点有效
             let got = mapCell(from: s, to: d, col: src.0, row: src.1)
             total += 1
             if got == dst { pass += 1 }
@@ -742,7 +742,9 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
         // 只看格号会把 B 套遗留的 90px 间距、历史偏移的脏坐标（如 2505 vs 标准 2493）固化，
         // 造成"同列两种 x / 行内间距小于图标宽"的可见重叠。
         let pixelClean = ox >= 0 && abs(ox - stdX) <= 3 && abs(oy - stdY) <= 3
-        let inBounds = ox <= ctx.screen.width - dst.lod && oy <= ctx.screen.height - dst.lod
+        // x/y 是图标「中心点」→ 边界判断用半宽，否则会把合法的最后一列误判越界并左移（与相邻列撞车）
+        let half = dst.lod / 2
+        let inBounds = ox <= ctx.screen.width - half && oy <= ctx.screen.height - half
         let dbg = CommandLine.arguments.contains("--applydebug")
         if dbg {
             print("DBG \(name.split(separator: "/").last ?? "") src(\(c),\(r)) map->(\(dc),\(dr)) oc/orow=(\(oc),\(orow)) pxClean=\(pixelClean) inBounds=\(inBounds) usedHas=\(used.contains("\(dc),\(dr)"))")
@@ -772,7 +774,7 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
                 let ny = Int((dst.y0 + Double(dr - 1) * dst.rowStep).rounded())
                 // 最右列完整放下：越界则左移（配合列数收敛到安全值，双保险）
                 var guardCount = 0
-                while nx > ctx.screen.width - dst.lod && fx > 1 && guardCount < 5 {
+                while nx > ctx.screen.width - half && fx > 1 && guardCount < 5 {
                     fx -= 1; guardCount += 1
                     nx = Int((dst.x0 + Double(fx - 1) * dst.colStep).rounded())
                 }
