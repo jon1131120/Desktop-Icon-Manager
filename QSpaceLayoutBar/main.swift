@@ -39,6 +39,9 @@ var autoSwitchOn = UserDefaults.standard.object(forKey: "autoSwitchOn") == nil
     ? true
     : UserDefaults.standard.bool(forKey: "autoSwitchOn")
 var autoMonitorOn = UserDefaults.standard.object(forKey: "autoMonitorOff") == nil
+var microNudgeOn = UserDefaults.standard.object(forKey: "microNudgeOff") == nil
+    ? true
+    : UserDefaults.standard.bool(forKey: "microNudgeOff")
 
 // MARK: - 基础工具
 
@@ -205,6 +208,9 @@ func saveLayout(named name: String, isAuto: Bool = false) {
     let displayStamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
     let rawName = isAuto ? "\(machinePrefix)\(autoPrefix)[\(screenType)] \(safeStamp)" : "\(machinePrefix)\(name)"
     let finalName = rawName.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+    // 全量收录桌面显示设置（图标大小 lod、行列间距、文字大小、标签位置、硬盘/外置盘/服务器显示等 15 键）
+    var desktopSettings: [String: Any] = [:]
+    for (k, v) in conf where k != "itemAttrs" { desktopSettings[k] = v }
     let snapshot: [String: Any] = [
         "name": finalName,
         "savedAt": displayStamp,
@@ -214,6 +220,7 @@ func saveLayout(named name: String, isAuto: Bool = false) {
         "iconCount": attrs.count,
         "isAuto": isAuto,
         "itemAttrs": attrs,
+        "desktopSettings": desktopSettings,
         "itemVSpacing": conf["itemVSpacing"] ?? 0,
         "showItemBriefInfo": conf["showItemBriefInfo"] ?? true,
     ]
@@ -359,8 +366,13 @@ func restoreLayout(at url: URL, restart: Bool = true) {
         }
     }
     conf["itemAttrs"] = newAttrs
-    if let sp = snap["itemVSpacing"] { conf["itemVSpacing"] = sp }
-    if let sb = snap["showItemBriefInfo"] { conf["showItemBriefInfo"] = sb }
+    // 全量还原桌面显示设置（图标大小/行列间距/标签位置/显示类别等）；旧快照无该字段则只还原原有两项
+    if let ds = snap["desktopSettings"] as? [String: Any] {
+        for (k, v) in ds where k != "itemAttrs" { conf[k] = v }
+    } else {
+        if let sp = snap["itemVSpacing"] { conf["itemVSpacing"] = sp }
+        if let sb = snap["showItemBriefInfo"] { conf["showItemBriefInfo"] = sb }
+    }
     currentLayoutName = (snap["name"] as? String) ?? url.deletingPathExtension().lastPathComponent
 
     if restart {
@@ -368,9 +380,10 @@ func restoreLayout(at url: URL, restart: Bool = true) {
         // 再写 conf，最后启动 QSpace 读取，否则写入会被内存回写覆盖
         appDelegate?.setBusy(true)
         atomicWriteConfAndRestartQSpace(conf)
+        microNudge(conf: conf)  // 重启后微拖拽 1px，触发 QSpace snapToGrid 自动纠错
         appDelegate?.setBusy(false)
         appDelegate?.rebuildMenu()
-        notify("已恢复「\(currentLayoutName)」：匹配 \(matched) 个, 保留新增 \(keptNew) 个")
+        notify("已恢复「\(currentLayoutName)」：匹配 \(matched) 个, 保留新增 \(keptNew) 个（设置已还原）")
     } else {
         writeConf(conf)
     }
@@ -400,6 +413,46 @@ func autoSwitchIfNeeded() {
     logLine("autoSwitch: no layout matched fp=\(fp)")
     currentLayoutName = "（未匹配）"
     appDelegate?.rebuildMenu()
+}
+
+// MARK: - 微拖拽纠错（恢复重启后模拟 1px 拖拽，触发 QSpace snapToGrid 自动对齐）
+
+func microNudge(conf: [String: Any]) {
+    guard microNudgeOn else { logLine("nudge: 已关闭,跳过"); return }
+    guard AXIsProcessTrusted() else {
+        logLine("nudge: 无辅助功能权限,跳过并提示")
+        notify("微拖拽纠错需要授权一次：系统设置 → 隐私与安全性 → 辅助功能 → 勾选 QSpaceLayoutBar")
+        return
+    }
+    guard let attrs = conf["itemAttrs"] as? [[String: Any]],
+          let mainScreen = NSScreen.screens.first else { return }
+    // 只选主屏内、远离边缘的图标（CGEvent 与 QSpace 的逻辑点坐标同为左上原点）
+    let mw = Double(mainScreen.frame.width), mh = Double(mainScreen.frame.height)
+    var target: (x: Double, y: Double)?
+    for a in attrs {
+        guard let x = a["x"] as? Int, let y = a["y"] as? Int else { continue }
+        let dx = Double(x), dy = Double(y)
+        if dx > 16, dy > 48, dx < mw - 120, dy < mh - 120 { target = (dx, dy); break }
+    }
+    guard let t = target else { logLine("nudge: 主屏内无可用图标,跳过"); return }
+    Thread.sleep(forTimeInterval: 2.0)  // 等 QSpace 渲染稳定
+    let p = CGPoint(x: t.x + 8, y: t.y + 8)  // 96px 图标左上角 +8 必落在图标内
+    let src = CGEventSource(stateID: .hidSystemState)
+    func post(_ type: CGEventType, _ pt: CGPoint) {
+        if let e = CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: pt, mouseButton: .left) {
+            e.post(tap: .cghidEventTap)
+        }
+    }
+    post(.mouseMoved, p)
+    Thread.sleep(forTimeInterval: 0.2)
+    post(.leftMouseDown, p)
+    Thread.sleep(forTimeInterval: 0.15)
+    post(.leftMouseDragged, CGPoint(x: p.x + 1, y: p.y))
+    Thread.sleep(forTimeInterval: 0.15)
+    post(.leftMouseDragged, p)  // 拖回原位再松手：位置不变，只触发对齐纠错
+    Thread.sleep(forTimeInterval: 0.15)
+    post(.leftMouseUp, p)
+    logLine("nudge: 在 (\(Int(t.x)),\(Int(t.y))) 完成 1px 微拖拽纠错")
 }
 
 // MARK: - 合盖/开盖绑定应用
@@ -651,6 +704,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         nowIt.target = self
         menu.addItem(nowIt)
 
+        let nudgeIt = NSMenuItem(title: "🔧 恢复后微拖拽纠错", action: #selector(toggleNudge(_:)), keyEquivalent: "")
+        nudgeIt.target = self
+        nudgeIt.state = microNudgeOn ? .on : .off
+        menu.addItem(nudgeIt)
+
         menu.addItem(.separator())
         let quitIt = NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quitIt)
@@ -717,6 +775,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func monitorNow(_ sender: NSMenuItem) {
         monitorLayoutChanges()
+    }
+
+    @objc func toggleNudge(_ sender: NSMenuItem) {
+        microNudgeOn.toggle()
+        UserDefaults.standard.set(!microNudgeOn, forKey: "microNudgeOff")
+        rebuildMenu()
     }
 
     @objc func bindClicked(_ sender: NSMenuItem) {
