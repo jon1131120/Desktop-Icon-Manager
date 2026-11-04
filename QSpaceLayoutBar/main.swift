@@ -434,15 +434,20 @@ func autoSwitchIfNeeded() {
 
 func microNudge(conf: [String: Any]) {
     guard microNudgeOn else { logLine("nudge: 已关闭,跳过"); return }
-    // 系统标准授权弹窗：首次会弹出"QSpaceLayoutBar 想控制此电脑"，并自动把 app 加入辅助功能列表
-    let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-    let trusted = AXIsProcessTrustedWithOptions(opts)
-    guard trusted else {
-        logLine("nudge: 无辅助功能权限,已弹系统授权框并打开设置面板")
-        DispatchQueue.main.async {
-            subprocessRun(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
+    guard AXIsProcessTrusted() else {
+        // 防弹框轰炸：每 6 小时最多触发一次系统授权弹窗+设置面板，其余时间只写日志跳过
+        let now = Date().timeIntervalSince1970
+        let last = UserDefaults.standard.double(forKey: "nudgePromptedAt")
+        if now - last > 6 * 3600 {
+            UserDefaults.standard.set(now, forKey: "nudgePromptedAt")
+            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(opts)
+            DispatchQueue.main.async {
+                subprocessRun(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
+            }
+            notify("微拖拽需一次性授权：系统设置→隐私与安全性→辅助功能→勾选 QSpaceLayoutBar")
         }
-        notify("请在系统设置→隐私与安全性→辅助功能里勾选 QSpaceLayoutBar，然后重新点一次恢复")
+        logLine("nudge: 未授权,跳过(授权后需重启工具生效)")
         return
     }
     guard let attrs = conf["itemAttrs"] as? [[String: Any]],
