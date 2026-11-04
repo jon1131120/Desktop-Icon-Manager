@@ -3,12 +3,29 @@ import AppKit
 // MARK: - 常量与路径
 
 let confPath = NSString(string: "~/Library/Application Support/com.jinghaoshe.qspace.pro/desktop.conf").expandingTildeInPath
-let layoutDir = NSString(string: "~/qspace-layouts/layouts").expandingTildeInPath
+let layoutDir = NSString(string: "~/Library/Mobile Documents/com~apple~CloudDocs/qspace-layouts").expandingTildeInPath
 let logPath = NSString(string: "~/qspace-layouts/app.log").expandingTildeInPath
 let qspaceApp = "/Applications/QSpace Pro.app"
 let launchAgentPlist = NSString(string: "~/Library/LaunchAgents/com.jon1131120.qspacelayoutbar.plist").expandingTildeInPath
 let autoPrefix = "自动 "
 let maxAutoSnapshots = 10
+// 机器标识：跨机共享快照目录时区分来源（文件名前缀 [MBP]/[Air]/[Studio]），自动清理/监测/绑定只认本机
+// 注意：不能用 Host.current().name——它会做阻塞式 DNS 解析，间歇性卡死主线程（实测采样 781/781 卡在 NSHost blockingResolve）。
+// 改用 sysctl 读内核 hostname，纯内存零网络 IO。
+let machineTag: String = {
+    var size = 0
+    sysctlbyname("kern.hostname", nil, &size, nil, 0)
+    var buf = [CChar](repeating: 0, count: size)
+    sysctlbyname("kern.hostname", &buf, &size, nil, 0)
+    let host = String(cString: buf).lowercased()
+    if host.contains("macbookpro") || host.contains("mbp") { return "MBP" }
+    if host.contains("macbookair") { return "Air" }
+    if host.contains("macstudio") { return "Studio" }
+    return host.split(separator: ".").first.map(String.init) ?? "Mac"
+}()
+let machinePrefix = "[\(machineTag)] "
+// 主线程只读缓存，后台线程刷新——iCloud 目录枚举会阻塞主线程数分钟（实测 1519 采样点全卡在 contentsOfDirectory），绝不在主线程同步枚举
+var cachedLayouts: [URL] = []
 // 时光机监测参数（Desktop OK 式：拉开差距才记）
 let monitorIntervalSec: TimeInterval = 1800   // 每 30 分钟监测一次
 let changeThreshold = 0.20                    // 变化 ≥20% 视为大改
@@ -44,13 +61,29 @@ func writeConf(_ conf: [String: Any]) {
     try? data.write(to: URL(fileURLWithPath: confPath))
 }
 
-func layoutURLs() -> [URL] {
+/// 同步枚举（只允许后台线程调用；iCloud 目录枚举可能阻塞主线程）
+func enumerateLayoutsSync() -> [URL] {
     let fm = FileManager.default
     try? fm.createDirectory(atPath: layoutDir, withIntermediateDirectories: true)
     return ((try? fm.contentsOfDirectory(atPath: layoutDir)) ?? [])
         .filter { $0.hasSuffix(".json") }
         .map { URL(fileURLWithPath: layoutDir).appendingPathComponent($0) }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
+}
+
+/// 主线程用：只读缓存，绝不触发 IO
+func layoutURLs() -> [URL] { cachedLayouts }
+
+/// 后台刷新共享目录；列表有变化才重建菜单（避免 30 秒轮询反复闪烁）
+func refreshLayoutsAsync() {
+    DispatchQueue.global(qos: .utility).async {
+        let urls = enumerateLayoutsSync()
+        DispatchQueue.main.async {
+            let changed = cachedLayouts.map { $0.lastPathComponent } != urls.map { $0.lastPathComponent }
+            cachedLayouts = urls
+            if changed { appDelegate?.rebuildMenu() }
+        }
+    }
 }
 
 func qspaceRunning() -> Bool {
@@ -170,7 +203,7 @@ func saveLayout(named name: String, isAuto: Bool = false) {
     df.dateFormat = "MM-dd_HHmm"
     let safeStamp = df.string(from: Date())  // 文件名安全格式（无 / : 等非法字符）
     let displayStamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
-    let rawName = isAuto ? "\(autoPrefix)[\(screenType)] \(safeStamp)" : name
+    let rawName = isAuto ? "\(machinePrefix)\(autoPrefix)[\(screenType)] \(safeStamp)" : "\(machinePrefix)\(name)"
     let finalName = rawName.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
     let snapshot: [String: Any] = [
         "name": finalName,
@@ -197,7 +230,7 @@ func saveLayout(named name: String, isAuto: Bool = false) {
         logLine("saveLayout: 写入失败 \(error)")
     }
     currentLayoutName = finalName
-    appDelegate?.rebuildMenu()
+    refreshLayoutsAsync()
     if !isAuto { notify("已保存布局「\(name)」（\(fp)）") }
 }
 
@@ -205,7 +238,8 @@ func pruneAutoSnapshots() {
     let autos = layoutURLs().compactMap { url -> (URL, Date)? in
         guard let d = FileManager.default.contents(atPath: url.path),
               let s = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              (s["isAuto"] as? Bool) == true else { return nil }
+              (s["isAuto"] as? Bool) == true,
+              (s["name"] as? String)?.hasPrefix(machinePrefix) == true else { return nil }  // 跨机共享目录：只清理本机的自动快照
         let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? nil
         return (url, mtime ?? Date.distantPast)
     }
@@ -214,6 +248,7 @@ func pruneAutoSnapshots() {
     for (url, _) in sorted.prefix(autos.count - maxAutoSnapshots) {
         try? FileManager.default.removeItem(at: url)
     }
+    refreshLayoutsAsync()
 }
 
 // MARK: - 布局恢复（容错铁律：绝不报错刷屏，绝不因文件增删停工）
@@ -263,6 +298,8 @@ func monitorLayoutChanges() {
         guard let d = FileManager.default.contents(atPath: url.path),
               let s = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let attrs = s["itemAttrs"] as? [[String: Any]] else { continue }
+        // 跨机共享目录：监测/锚点/最近自动快照只统计本机条目（别机布局分辨率不同，永远大差异会误触发存档）
+        guard (s["name"] as? String)?.hasPrefix(machinePrefix) == true else { continue }
         let r = changeRatio(between: cur, and: attrs)
         maxRatioToAny = max(maxRatioToAny, r)
         let isAuto = (s["isAuto"] as? Bool) == true
@@ -346,6 +383,7 @@ func autoSwitchIfNeeded() {
     }
     let fp = currentFingerprint()
     logLine("autoSwitch: fp=\(fp), current=\(currentLayoutName)")
+    refreshLayoutsAsync()  // 顺带后台刷新共享目录（不阻塞本次匹配，新同步来的快照下一轮生效）
     for url in layoutURLs() {
         guard let d = FileManager.default.contents(atPath: url.path),
               let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
@@ -450,6 +488,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lastKnownFingerprint = fp
                 autoSwitchIfNeeded()
             }
+            refreshLayoutsAsync()  // 顺带后台刷新共享快照目录（别机新快照 30 秒内进入本机视野）
         }
         RunLoop.main.add(poll, forMode: .common)
         // 合盖（睡眠前）：绑定方案则先退出 QSpace 再写 conf（防内存回写）
@@ -477,8 +516,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(t, forMode: .common)
 
-        remindLegacySnapshots()
-        rebuildMenu()
+        rebuildMenu()          // 先用缓存（可能为空）秒建菜单，绝不阻塞启动
+        refreshLayoutsAsync()  // 后台拉取共享目录列表，完成后自动重建菜单
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.remindLegacySnapshots() }
     }
 
     func setBusy(_ b: Bool) {
@@ -508,6 +548,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let d = FileManager.default.contents(atPath: url.path),
                   let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                   let name = snap["name"] as? String else { continue }
+            guard name.hasPrefix(machinePrefix) else { continue }  // 合盖/开盖绑定只认本机方案（别机坐标恢复会错位）
             let it = NSMenuItem(title: name, action: #selector(bindClicked(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = ["kind": kind, "name": name]
@@ -638,15 +679,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               var snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let oldName = snap["name"] as? String else { return }
         promptName(title: "重命名布局", info: "「\(oldName)」的新名字：", preset: oldName) { newName in
-            snap["name"] = newName
+            let finalName = newName.hasPrefix("[") ? newName : machinePrefix + newName  // 保留机器归属前缀
+            snap["name"] = finalName
             if let data = try? JSONSerialization.data(withJSONObject: snap, options: [.prettyPrinted]) {
                 try? data.write(to: URL(fileURLWithPath: oldPath))
-                let newPath = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(newName).json").path
+                let newPath = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName).json").path
                 if oldPath != newPath {
                     try? FileManager.default.removeItem(atPath: oldPath)
                 }
-                if currentLayoutName == oldName { currentLayoutName = newName }
-                self.rebuildMenu()
+                if currentLayoutName == oldName { currentLayoutName = finalName }
+                refreshLayoutsAsync()
             }
         }
     }
@@ -654,7 +696,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func deleteClicked(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String else { return }
         try? FileManager.default.removeItem(atPath: path)
-        rebuildMenu()
+        refreshLayoutsAsync()
     }
 
     @objc func toggleAuto(_ sender: NSMenuItem) {
