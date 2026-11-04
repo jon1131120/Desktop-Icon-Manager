@@ -1207,6 +1207,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // 布局自动同步：每 3 秒一轮（广播本机 + 拉取其他机器）
         syncState = loadSyncState()
+        // 启动基线：把当前指纹直接记为"已见"，避免首轮把自身当成"用户刚改动"
+        if let c0 = loadConf(), let s0 = makeGridSnapshot(conf: c0) {
+            lastSeenFp = s0["layoutFingerprint"] as? String ?? ""
+        }
+        lastLocalChangeAt = 0
         let syncT = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in runSyncCycle() }
         RunLoop.main.add(syncT, forMode: .common)
 
