@@ -38,14 +38,17 @@ var lastKnownFingerprint = ""
 var autoSwitchOn = UserDefaults.standard.object(forKey: "autoSwitchOn") == nil
     ? true
     : UserDefaults.standard.bool(forKey: "autoSwitchOn")
-var autoMonitorOn = UserDefaults.standard.object(forKey: "autoMonitorOff") == nil
 // 微拖拽纠错：默认关闭。
 // 原因：它需要「辅助功能」权限，未授权时老版本每 6 小时弹系统授权窗+打开设置面板，
 // 属于持续骚扰；而布局本身已由「网格映射 + 应用后校验」保证对齐，不依赖这个功能。
-// 需要时手动开：defaults write com.jon1131120.qspacelayoutbar microNudgeOn -bool true
-var microNudgeOn = UserDefaults.standard.bool(forKey: "microNudgeOn")
-    ? true
-    : UserDefaults.standard.bool(forKey: "microNudgeOff")
+// 需要时：菜单里勾选，或 defaults write com.jon1131120.qspacelayoutbar microNudgeOn -bool true
+var microNudgeOn: Bool = {
+    let d = UserDefaults.standard
+    if d.object(forKey: "microNudgeOn") != nil { return d.bool(forKey: "microNudgeOn") }
+    // 兼容旧键：microNudgeOff == false 表示历史版本里曾开启过
+    if d.object(forKey: "microNudgeOff") != nil { return !d.bool(forKey: "microNudgeOff") }
+    return false    // 默认关闭
+}()
 
 // MARK: - 基础工具
 
@@ -148,8 +151,18 @@ func atomicWriteConfAndRestartQSpace(_ conf: [String: Any]) {
 
 var logBytesWritten: Int64 = 0   // 日志字节计数（轮转判定用，避免每次 stat）
 
+/// 日志时间统一用**本地时区**（原来用 Date() 的默认描述 = UTC，
+/// 与中枢日志（本地时间）差 8 小时，跨机对比排障极易看错）
+let logFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    f.timeZone = .current
+    f.locale = Locale(identifier: "en_US_POSIX")
+    return f
+}()
+
 func logLine(_ msg: String) {
-    let line = "\(Date()): \(msg)\n"
+    let line = "\(logFormatter.string(from: Date())): \(msg)\n"
     // 简单轮转：超过 5MB 归档为 app.log.1（只留 1 份）
     // 用内存计数代替每次 stat（避免每写一行都做一次文件系统调用）
     logBytesWritten += Int64(line.utf8.count)
@@ -947,8 +960,8 @@ func fixOverlapsIfNeeded() -> Bool {
     overlapFixStreak += 1
     logLine("overlap: 本机 \(r.patched) 个重叠图标已自动推开（第 \(overlapFixStreak) 次）")
     rt.applyingRemote = true
+    defer { rt.applyingRemote = false }   // 必须 defer：中途任何 return/异常都不能把标志位卡在 true
     atomicWriteConfAndRestartQSpace(r.newConf)
-    rt.applyingRemote = false
     // 不重置 baseline：让 broadcastIfNeeded 自然检测到 fp 变化 → 10 秒防抖后上报
     rt.lastSeenFp = ""              // 让下一轮重新采样，避免把修正当"用户拖动"
     return true
@@ -1269,6 +1282,7 @@ func applyRemote(_ snap: [String: Any], fp: String, file: String) {
         return
     }
     rt.applyingRemote = true
+    defer { rt.applyingRemote = false }   // 必须 defer：中途 return 不能把标志位卡在 true
     appDelegate?.setBusy(true)
     let src = snap["sourceMachine"] as? String ?? file
     var dstKey = "?"
@@ -1657,18 +1671,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setLoginItem(!loginItemEnabled())
     }
 
-    @objc func toggleMonitor(_ sender: NSMenuItem) {
-        autoMonitorOn.toggle()
-        UserDefaults.standard.set(!autoMonitorOn, forKey: "autoMonitorOff")
-        rebuildMenu()
-    }
-
-    @objc func monitorNow(_ sender: NSMenuItem) {
-    }
-
     @objc func toggleNudge(_ sender: NSMenuItem) {
         microNudgeOn.toggle()
-        UserDefaults.standard.set(!microNudgeOn, forKey: "microNudgeOff")
+        // 必须写回代码真正读取的键（旧实现写 microNudgeOff，导致开关重启后失效）
+        UserDefaults.standard.set(microNudgeOn, forKey: "microNudgeOn")
+        logLine("菜单: 微拖拽纠错 -> \(microNudgeOn ? "开" : "关")")
         rebuildMenu()
     }
 

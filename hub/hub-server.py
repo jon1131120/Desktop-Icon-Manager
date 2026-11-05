@@ -17,6 +17,8 @@ MAX_ARCHIVE = 20
 MAX_BODY = 1_000_000          # 请求体上限 1MB，防超大 JSON 打爆内存
 MAX_ITEMS = 500
 MAX_COORD = 1000         # 单轴坐标上限（SPEC 实际最大 21x9，留余量）
+GET_LOG_INTERVAL = 300  # 同一来源的 GET /layout 成功日志最多 5 分钟记一次（三台每 10 秒轮询 → 每天 2.6MB 噪声）
+_get_log_at = {}        # peer -> last ts         # 单轴坐标上限（SPEC 实际最大 21x9，留余量）
 SYNC_FUTURE_TOLERANCE = 300    # 时间戳最多允许超前 5 分钟（防未来时间戳永久锁死中枢）
 ALLOWED_NETS = [ipaddress.ip_network(n) for n in
                 ("127.0.0.1/32", "192.168.113.0/24", "192.168.191.0/24")]
@@ -146,11 +148,18 @@ class H(BaseHTTPRequestHandler):
         if self.path == '/layout':
             cur = load_latest()
             peer = peer_name(self.client_address[0])
-            if cur:
-                logger.info("GET /layout  %s  <- hub[%s syncAt=%s items=%d]",
-                            peer, cur.get('sourceMachine'), cur.get('syncAt'), len(cur.get('items', [])))
-            else:
-                logger.info("GET /layout  %s  <- hub(empty)", peer)
+            # 节流：三台每 10 秒轮询一次，全记会让 hub.log 每天涨 2.6MB（纯噪声）。
+            # 同一来源 5 分钟内只记一条；状态变化（items 数或 source 变）仍立即记。
+            now_ts = int(time.time())
+            sig = (cur.get('sourceMachine'), len(cur.get('items', []))) if cur else (None, 0)
+            prev = _get_log_at.get(peer)
+            if prev is None or now_ts - prev[0] >= GET_LOG_INTERVAL or prev[1] != sig:
+                _get_log_at[peer] = (now_ts, sig)
+                if cur:
+                    logger.info("GET /layout  %s  <- hub[%s syncAt=%s items=%d]",
+                                peer, cur.get('sourceMachine'), cur.get('syncAt'), len(cur.get('items', [])))
+                else:
+                    logger.info("GET /layout  %s  <- hub(empty)", peer)
             self._json(200, cur or {})
         elif self.path == '/status':
             cur = load_latest()
