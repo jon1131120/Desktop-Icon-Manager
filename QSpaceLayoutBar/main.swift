@@ -1100,8 +1100,19 @@ func loadSyncState() -> [String: Any] {
 func saveSyncState(_ s: [String: Any]) {
     let dir = NSString(string: "~/qspace-layouts").expandingTildeInPath
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    if let d = try? JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted]) {
+    guard let d = try? JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted]) else { return }
+    // 原子写：崩溃时 sync-state.json 不会被截断成半个 JSON
+    // （非原子写一旦中途崩溃 → 文件损坏 → loadSyncState 返回 {} → 状态全丢，
+    //   表现为"重启后又把旧布局当新改动上报"）
+    let tmp = syncStatePath + ".tmp"
+    do {
+        try d.write(to: URL(fileURLWithPath: tmp), options: .atomic)
+        _ = try FileManager.default.replaceItemAt(URL(fileURLWithPath: syncStatePath),
+                                                  withItemAt: URL(fileURLWithPath: tmp))
+    } catch {
+        // 回退：直接写，并记录错误
         try? d.write(to: URL(fileURLWithPath: syncStatePath))
+        logLine("saveSyncState: 原子写失败，已回退直接写: \(error.localizedDescription)")
     }
 }
 
@@ -1202,6 +1213,7 @@ func broadcastIfNeeded() {
 
     let accepted = (resp["accepted"] as? Bool) ?? false
     if accepted {
+        st["pendingRepushFp"] = ""
         logLine("sync: 上报中枢 ✅ 接受 fp=\(fp) items=\(items)")
         st["baselineFingerprint"] = fp
         st["lastBroadcastFingerprint"] = fp
@@ -1211,8 +1223,21 @@ func broadcastIfNeeded() {
         st["lastAppliedFingerprint"] = fp
         st["lastAppliedAt"] = now
     } else {
-        logLine("sync: 上报被拒（中枢有更新版本 \(resp["latestSyncAt"] ?? "?")），等下一轮拉取")
-        st["baselineFingerprint"] = fp   // 已知道中枢更新 → 交给拉取
+        // ⚠️ 被拒说明中枢有同秒或更新的版本（同步时钟 + 同秒碰撞）。
+        //    旧实现直接把 baseline 设成 fp → 本机改动被永久抑制，
+        //    再拉远端又会把本机刚拖的位置盖掉 → 该机这次改动彻底丢失。
+        //    新实现：保留 baseline（下次轮询会再报一次，那时 syncAt 已更新 → 能进中枢），
+        //    且本轮不拉远端（避免远端盖掉本机改动）。
+        if (st["pendingRepushFp"] as? String) == fp {
+            // 重推后仍被拒 → 放弃（避免无限循环），交给拉取
+            st["pendingRepushFp"] = ""
+            st["baselineFingerprint"] = fp
+            logLine("sync: 上报重推后仍被拒，放弃本机版本，交给拉取")
+        } else {
+            st["pendingRepushFp"] = fp
+            rt.skipPullOnce = true
+            logLine("sync: 上报被拒（中枢 syncAt=\(resp["latestSyncAt"] ?? "?")），下轮用新时间戳重推，本轮不拉远端")
+        }
     }
     saveSyncState(st)
 }
@@ -1390,6 +1415,7 @@ final class SyncRuntime: @unchecked Sendable {
     private var _lastSeenFp = ""           // 上一轮看到的本机指纹
     private var _lastSpecKey = ""          // 当前套
     private var _applyingRemote = false    // 防重入
+    private var _skipPullOnce = false      // 上报被拒 → 本轮不拉远端（否则远端会盖掉本机刚改的）
     private var _syncState: [String: Any] = [:]
 
     var suppressUntil: Int {
@@ -1412,6 +1438,10 @@ final class SyncRuntime: @unchecked Sendable {
         get { lock.lock(); defer { lock.unlock() }; return _applyingRemote }
         set { lock.lock(); _applyingRemote = newValue; lock.unlock() }
     }
+    var skipPullOnce: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _skipPullOnce }
+        set { lock.lock(); _skipPullOnce = newValue; lock.unlock() }
+    }
     var syncState: [String: Any] {
         get { lock.lock(); defer { lock.unlock() }; return _syncState }
         set { lock.lock(); _syncState = newValue; lock.unlock() }
@@ -1427,6 +1457,11 @@ func runSyncCycle() {
         broadcastIfNeeded()
         let remote = fetchRemote()          // 网络在后台线程
         guard let r = remote else { return }
+        if rt.skipPullOnce {
+            rt.skipPullOnce = false
+            logLine("sync: 本轮跳过拉取（上报被拒，等下一轮重推）")
+            return
+        }
         DispatchQueue.main.sync { applyRemoteIfNewer(r) }
     }
 }

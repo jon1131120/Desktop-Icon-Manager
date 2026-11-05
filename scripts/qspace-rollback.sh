@@ -16,6 +16,34 @@ MINIPC="minipc"
 ARCH="/home/jon113/qspace-hub/archive"
 
 # 中枢共享密钥（与客户端同一份；600 权限）。缺失时脚本会 401。
+# ⚠️ 归档选择器：列表与回滚必须用**同一个**（同样的排序+过滤），
+#    否则编号对不上文件 —— 旧实现列表用 Python 按 mtime 排 + 过滤 unknown，
+#    回滚却用 `ls -t | grep -v unknown` → 两套规则 → 回滚到别的文件。
+select_archive() {
+    local MODE="$1"; local IDXARG="${2:-1}"
+    ssh -o BatchMode=yes -o ConnectTimeout=5 "$MINIPC" python3 - "$ARCH" "$MODE" "$IDXARG" <<'PYLIST'
+import json, glob, os, sys
+arch, mode, idxarg = sys.argv[1], sys.argv[2], sys.argv[3]
+fs = sorted(glob.glob(os.path.join(arch, '*.json')), key=lambda f: -os.path.getmtime(f))
+fs = [f for f in fs if not f.endswith('-unknown.json')]
+if mode == 'pick':
+    idx = int(idxarg)
+    if idx < 1 or idx > len(fs):
+        sys.exit(1)
+    print(fs[idx - 1])
+else:
+    for i, f in enumerate(fs[:15], 1):
+        try:
+            d = json.load(open(f))
+            n = len(d.get('items') or [])
+            fp = d.get('layoutFingerprint') or ''
+            mark = '✅' if (fp and n > 0) else '❌'
+            print('%2d) %-42s %s %3d项 %s' % (i, os.path.basename(f), mark, n, (fp or 'None')[:12]))
+        except Exception:
+            print('%2d) %-42s ❌ 读取失败' % (i, os.path.basename(f)))
+PYLIST
+}
+
 RBLOG="$HOME/qspace-layouts/rollback.log"
 TOKEN_FILE="$HOME/qspace-layouts/hub-token.txt"
 HUB_TOKEN=""
@@ -113,28 +141,14 @@ if [ -z "$1" ]; then
     curl -s -m 5 -H "X-Hub-Token: $HUB_TOKEN" "$API/status"
     echo ""
     echo "最近的布局归档（1 = 最新）："
-    ssh -o BatchMode=yes -o ConnectTimeout=5 "$MINIPC" python3 - "$ARCH" <<'PYLIST'
-import json, glob, os, sys
-arch = sys.argv[1]
-fs = sorted(glob.glob(os.path.join(arch, '*.json')), key=lambda f: -os.path.getmtime(f))
-fs = [f for f in fs if not f.endswith('-unknown.json')]
-for i, f in enumerate(fs[:15], 1):
-    try:
-        d = json.load(open(f))
-        n = len(d.get('items') or [])
-        fp = d.get('layoutFingerprint') or ''
-        mark = '✅' if (fp and n > 0) else '❌'
-        print('%2d) %-42s %s %3d项 %s' % (i, os.path.basename(f), mark, n, (fp or 'None')[:12]))
-    except Exception:
-        print('%2d) %-42s ❌ 读取失败' % (i, os.path.basename(f)))
-PYLIST
+    select_archive list
     echo ""
     echo "回滚用法: $0 <编号>"
     exit 0
 fi
 
 IDX="$1"
-FILE=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$MINIPC" "ls -t $ARCH/*.json 2>/dev/null" | grep -v -- "-unknown.json$" | sed -n "${IDX}p")
+FILE=$(select_archive pick "$IDX")
 if [ -z "$FILE" ]; then
     echo "❌ 编号 $1 无效（先运行 $0 查看列表）"
     exit 1

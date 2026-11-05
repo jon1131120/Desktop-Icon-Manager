@@ -91,7 +91,14 @@ def save_latest(data):
     os.replace(tmp, LATEST)
     ts = datetime.datetime.fromtimestamp(data.get('syncAt', time.time())).strftime('%Y%m%d-%H%M%S')
     src = str(data.get('sourceMachine', 'unknown')).replace('/', '_').replace(' ', '_')
-    with open(os.path.join(ARCHIVE, f'{ts}-{src}.json'), 'w') as f:
+    # 同机器同秒两次上报 → 同名 → 后者覆盖前者（归档丢一条）。加序号防撞。
+    base = f'{ts}-{src}'
+    name = base + '.json'
+    k = 1
+    while os.path.exists(os.path.join(ARCHIVE, name)):
+        name = f'{base}-{k}.json'
+        k += 1
+    with open(os.path.join(ARCHIVE, name), 'w') as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
     files = sorted(f for f in os.listdir(ARCHIVE) if f.endswith('.json'))
     for f in files[:-MAX_ARCHIVE]:
