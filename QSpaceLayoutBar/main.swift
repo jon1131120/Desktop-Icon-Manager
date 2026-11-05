@@ -1186,7 +1186,12 @@ func broadcastIfNeeded() {
         logLine("sync: 上报自检失败（\(dupCells) 个格重叠），拒绝上报以免污染中枢")
         return
     }
-    snap["syncAt"] = now
+    // 时钟偏移补偿：本机时钟若慢于中枢（NTP 校正/手工改时），
+    // 直接用本机 now 上报会永远被判 "older" → 重推也无效 → 改动永久丢失。
+    // 被拒时把「中枢时间 - 本机时间 + 1」记为 offset，之后每次上报都补上，
+    // 保证 at 一定落在中枢当前 syncAt 之后。
+    let clockOffset = st["clockOffset"] as? Int ?? 0
+    snap["syncAt"] = now + clockOffset
     snap["sourceMachine"] = machineTag
     let items = gitems.count
     var resp = hubPost(body: snap)
@@ -1228,6 +1233,14 @@ func broadcastIfNeeded() {
         //    再拉远端又会把本机刚拖的位置盖掉 → 该机这次改动彻底丢失。
         //    新实现：保留 baseline（下次轮询会再报一次，那时 syncAt 已更新 → 能进中枢），
         //    且本轮不拉远端（避免远端盖掉本机改动）。
+        // 记录时钟偏移（无论是否首次被拒都要记，因为这是"为什么被拒"的根因）
+        if let latest = resp["latestSyncAt"] as? Int, latest > 0 {
+            let off = latest + 1 - now
+            if (st["clockOffset"] as? Int ?? 0) != off {
+                st["clockOffset"] = off
+                logLine("sync: 时钟偏移补偿 = \(off)s（中枢 \(latest) vs 本机 \(now)）")
+            }
+        }
         if (st["pendingRepushFp"] as? String) == fp {
             // 重推后仍被拒 → 放弃（避免无限循环），交给拉取
             st["pendingRepushFp"] = ""
@@ -1456,7 +1469,12 @@ func runSyncCycle() {
         _ = fixOverlapsIfNeeded()   // 本机重叠（QSpace 新建文件放重）→ 自动推开
         broadcastIfNeeded()
         let remote = fetchRemote()          // 网络在后台线程
-        guard let r = remote else { return }
+        guard let r = remote else {
+            // 没拉到数据就谈不上"跳过"，必须清掉标记，
+            // 否则网络恢复后第一次成功拉取会被白白跳过一次（多延迟一轮）
+            rt.skipPullOnce = false
+            return
+        }
         if rt.skipPullOnce {
             rt.skipPullOnce = false
             logLine("sync: 本轮跳过拉取（上报被拒，等下一轮重推）")
