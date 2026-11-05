@@ -1201,6 +1201,11 @@ func broadcastIfNeeded() {
         if let hubTime = hubServerTime() {
             logLine("sync: 本机时钟超前（中枢时间 \(hubTime)），用中枢时间重发")
             snap["syncAt"] = hubTime + 1
+            // ⭐ 同步更新 clockOffset，否则下轮还用旧 offset → 又 400 → 每轮多两次请求
+            var st0 = loadSyncState()
+            st0["clockOffset"] = hubTime + 1 - now
+            saveSyncState(st0)
+            st = st0
             resp = hubPost(body: snap)
         }
     }
@@ -1223,7 +1228,8 @@ func broadcastIfNeeded() {
         st["baselineFingerprint"] = fp
         st["lastBroadcastFingerprint"] = fp
         st["lastBroadcastAt"] = now
-        st["recentBroadcasts"] = recent + [now]
+        // 写入时截断到最近 60 秒，防止数组随长期运行无限膨胀（风暴保护只看 60 秒窗口）
+        st["recentBroadcasts"] = (recent + [now]).suffix(20)
         // 本机就是这份布局，同步记为"已生效"，避免下一轮 pull 把自己再应用一遍
         st["lastAppliedFingerprint"] = fp
         st["lastAppliedAt"] = now
