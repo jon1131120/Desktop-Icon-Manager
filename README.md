@@ -103,7 +103,7 @@ macOS 的桌面图标位置存在 QSpace Pro 的私有配置里（`desktop.conf`
 Desktop-Icon-Manager/
 ├── README.md                    ← 本文
 ├── QSpaceLayoutBar/             ← 客户端（菜单栏 app）
-│   ├── main.swift               主程序（1667 行）
+│   ├── main.swift               主程序（1839 行）
 │   ├── Info.plist               bundle 配置（含 NSLocalNetworkUsageDescription）
 │   └── build.sh                 构建脚本 → build/QSpaceLayoutBar.app
 ├── hub/                         ← 中枢（跑在 MINIPC）
@@ -116,7 +116,7 @@ Desktop-Icon-Manager/
 │   └── check-layout.py          独立验证（越界/重叠/列位/行距）
 └── docs/
     ├── ARCHITECTURE.md          完整架构与设计决策
-    └── audits/                  六轮 30 项白纸审计报告（共 64 项发现）
+    └── audits/                  问题总台账（十轮审计 80 项，按类型归档）
 ```
 
 ---
@@ -280,7 +280,7 @@ GET /status   → {ok, hasLayout, syncAt, sourceMachine, iconCount, archiveCount
 - **收敛稳定**：同步后 75 秒中枢零上报（不抖动）
 - **灾难恢复**：MINIPC 整机丢失不影响使用，三台各自有完整布局副本，任一台重新上报即可重建中枢
 
-详细验证记录见 `docs/audits/`（六轮白纸审计，累计 64 项发现全部修复）。
+问题与修复记录见 `docs/audits/问题总台账.md`（十轮白纸审计，80 项按类型归档）。
 
 ---
 
