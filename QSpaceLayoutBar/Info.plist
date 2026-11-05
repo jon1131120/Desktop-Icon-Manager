@@ -28,6 +28,11 @@
     <string>13.0</string>
     <key>NSHumanReadableCopyright</key>
     <string>Custom build for personal use</string>
+	<!-- 禁止系统自动终止（菜单栏 app 无窗口时 macOS 会在内存压力下杀掉它） -->
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
 	<key>NSAppSleepDisabled</key>
 	<true/>
 	<key>LSAppNapIsDisabled</key>

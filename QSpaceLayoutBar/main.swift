@@ -39,7 +39,11 @@ var autoSwitchOn = UserDefaults.standard.object(forKey: "autoSwitchOn") == nil
     ? true
     : UserDefaults.standard.bool(forKey: "autoSwitchOn")
 var autoMonitorOn = UserDefaults.standard.object(forKey: "autoMonitorOff") == nil
-var microNudgeOn = UserDefaults.standard.object(forKey: "microNudgeOff") == nil
+// 微拖拽纠错：默认关闭。
+// 原因：它需要「辅助功能」权限，未授权时老版本每 6 小时弹系统授权窗+打开设置面板，
+// 属于持续骚扰；而布局本身已由「网格映射 + 应用后校验」保证对齐，不依赖这个功能。
+// 需要时手动开：defaults write com.jon1131120.qspacelayoutbar microNudgeOn -bool true
+var microNudgeOn = UserDefaults.standard.bool(forKey: "microNudgeOn")
     ? true
     : UserDefaults.standard.bool(forKey: "microNudgeOff")
 
@@ -361,19 +365,13 @@ func autoSwitchIfNeeded() {
 func microNudge(conf: [String: Any]) {
     guard microNudgeOn else { logLine("nudge: 已关闭,跳过"); return }
     guard AXIsProcessTrusted() else {
-        // 防弹框轰炸：每 6 小时最多触发一次系统授权弹窗+设置面板，其余时间只写日志跳过
-        let now = Date().timeIntervalSince1970
-        let last = UserDefaults.standard.double(forKey: "nudgePromptedAt")
-        if now - last > 6 * 3600 {
-            UserDefaults.standard.set(now, forKey: "nudgePromptedAt")
-            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(opts)
-            DispatchQueue.main.async {
-                subprocessRun(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"])
-            }
-            notify("微拖拽需一次性授权：系统设置→隐私与安全性→辅助功能→勾选 QSpaceLayoutBar")
+        // ⚠️ 绝不主动弹系统授权窗，也不打开设置面板 —— 只写一次日志。
+        // （老版本每 6 小时弹一次窗+开设置，实测造成持续骚扰，已移除该行为。
+        //   想用此功能请手动到 系统设置→隐私与安全性→辅助功能 勾选本 app。）
+        if !UserDefaults.standard.bool(forKey: "nudgeWarned") {
+            UserDefaults.standard.set(true, forKey: "nudgeWarned")
+            logLine("nudge: 未授予辅助功能权限，微拖拽纠错不生效（不影响布局同步）")
         }
-        logLine("nudge: 未授权,跳过(授权后需重启工具生效)")
         return
     }
     guard let attrs = conf["itemAttrs"] as? [[String: Any]],
