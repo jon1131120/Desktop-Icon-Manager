@@ -847,6 +847,113 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
     return (nc, matched, kept, moved)
 }
 
+
+// MARK: - 本机重叠自动纠错（QSpace 新建文件时会把两个图标放在同一格）
+
+/// 检测本机桌面图标的同格重叠，保留第一个、其余按「行内右推→行末下行」挪到最近空格。
+/// 返回修正的图标数（0 = 无重叠，调用方不应写 conf）。
+func fixLocalOverlaps(conf: [String: Any]) -> (patched: Int, newConf: [String: Any])? {
+    guard let attrs = conf["itemAttrs"] as? [[String: Any]],
+          let ctx = localGridContext(attrs: attrs) else { return nil }
+    let spec = ctx.spec
+    let singleScreen = isSingleScreenConf(attrs)
+    let half = spec.lod / 2
+
+    // 收集参与同步的桌面图标
+    var entries: [(idx: Int, label: String, col: Int, row: Int)] = []
+    for (idx, it) in attrs.enumerated() {
+        guard isDesktopItem(it),
+              singleScreen || ((it["screen"].map { "\($0)" }) ?? "1") == ctx.screen.screenId,
+              let name = it["name"] as? String,
+              let x = (it["x"] as? NSNumber)?.intValue,
+              let y = (it["y"] as? NSNumber)?.intValue else { continue }
+        let col = max(1, min(spec.cols, Int(((Double(x) - spec.x0) / spec.colStep).rounded()) + 1))
+        let row = max(1, min(spec.rows, Int(((Double(y) - spec.y0) / spec.rowStep).rounded()) + 1))
+        entries.append((idx, (name as NSString).lastPathComponent, col, row))
+    }
+    guard entries.count > 1 else { return nil }
+
+    // 按位置排序（左上优先），逐个占格；撞了就往右推、行末下行
+    entries.sort { ($0.row, $0.col, $0.label) < ($1.row, $1.col, $1.label) }
+    var used = Set<String>()
+    var out = attrs
+    var patched = 0
+    for e in entries {
+        var (c, r) = (e.col, e.row)
+        // ⭐ 原位没被占就一律保留 —— 即使落在「禁区」也不推。
+        //    禁区只是软约束（QSpace 实际允许），若因禁区推开会把用户摆好的布局连锁改动
+        //    （实测一次误推 7 个：5,4→6,4→7,4→8,4 连锁右移）。只在**真同格重叠**时才修。
+        if !used.contains("\(c),\(r)") {
+            used.insert("\(c),\(r)")
+            continue
+        }
+        var g = 0
+        while used.contains("\(c),\(r)") || cellBlocked(spec, c, r) {
+            c += 1
+            if c > spec.cols { c = 1; r += 1 }
+            if r > spec.rows { break }
+            g += 1
+            if g > 500 { break }
+        }
+        guard r <= spec.rows else { continue }
+        used.insert("\(c),\(r)")
+        if c == e.col && r == e.row { continue }
+        // 写新坐标；最右列越界则左移（双保险）
+        var fx = c
+        var nx = Int((spec.x0 + Double(fx - 1) * spec.colStep).rounded())
+        let ny = Int((spec.y0 + Double(r - 1) * spec.rowStep).rounded())
+        var g2 = 0
+        while nx > ctx.screen.width - half && fx > 1 && g2 < 5 {
+            fx -= 1
+            nx = Int((spec.x0 + Double(fx - 1) * spec.colStep).rounded())
+            g2 += 1
+        }
+        out[e.idx]["x"] = nx
+        out[e.idx]["y"] = ny
+        patched += 1
+        logLine("overlap: 「\(e.label)」(\(e.col),\(e.row)) → (\(fx),\(r)) 自动推开")
+    }
+    guard patched > 0 else { return nil }
+    var nconf = conf
+    nconf["itemAttrs"] = out
+    return (patched, nconf)
+}
+
+/// 轮询调用：有重叠才修（改 conf + 重启 QSpace）
+/// 防死循环：连续修正超过 3 次就停手告警（QSpace 重启后若又放重，不能无限重启它）
+var lastOverlapFixAt = 0
+var overlapFixStreak = 0
+
+func fixOverlapsIfNeeded() -> Bool {
+    let now = Int(Date().timeIntervalSince1970)
+    if rt.applyingRemote { return false }                       // 正在应用远端
+    let st = loadSyncState()
+    let supUntil = max(rt.suppressUntil, st["suppressBroadcastUntil"] as? Int ?? 0)
+    if now < supUntil { return false }                          // 吸收期内不碰
+    if now - lastOverlapFixAt < 60 { return false }             // 冷却 60 秒
+    if overlapFixStreak >= 3 {
+        if overlapFixStreak == 3 {
+            overlapFixStreak = 4
+            logLine("overlap: ⚠️ 已连续修正 3 次仍有重叠，停止自动推开（可能是 QSpace 自身重排策略），请手动摆一次")
+            notify("桌面图标反复出现重叠，已停止自动纠错，请手动整理一次")
+        }
+        return false
+    }
+    guard let conf = loadConf(), let r = fixLocalOverlaps(conf: conf) else {
+        overlapFixStreak = 0        // 没重叠 → 清零，下次真出现时重新计数
+        return false
+    }
+    lastOverlapFixAt = now
+    overlapFixStreak += 1
+    logLine("overlap: 本机 \(r.patched) 个重叠图标已自动推开（第 \(overlapFixStreak) 次）")
+    rt.applyingRemote = true
+    atomicWriteConfAndRestartQSpace(r.newConf)
+    rt.applyingRemote = false
+    // 不重置 baseline：让 broadcastIfNeeded 自然检测到 fp 变化 → 10 秒防抖后上报
+    rt.lastSeenFp = ""              // 让下一轮重新采样，避免把修正当"用户拖动"
+    return true
+}
+
 // MARK: - 布局同步中枢客户端（MINIPC 常开，HTTP 18878）
 // 地址优先级：局域网 → ZeroTier（MBP/Air 带出门时只走 ZT，自动回退）
 // 直连 HTTP：首次访问会由系统弹「允许访问本地网络」窗口（无需进系统设置手动开）
@@ -1302,6 +1409,7 @@ let rt = SyncRuntime()
 func runSyncCycle() {
     syncQueue.async {
         checkSpecChange()
+        _ = fixOverlapsIfNeeded()   // 本机重叠（QSpace 新建文件放重）→ 自动推开
         broadcastIfNeeded()
         let remote = fetchRemote()          // 网络在后台线程
         guard let r = remote else { return }
