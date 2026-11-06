@@ -1623,7 +1623,7 @@ func checkSpecChange() {
         st.removeValue(forKey: "lastAppliedFingerprint")
         st.removeValue(forKey: "lastAppliedAt")
         // 关键：把"切套后本机 fp"直接记为已知，之后不再当成用户改动上报
-        // （否则冷静期 20 秒一过，仍会把按新套反推的坐标当真源覆盖中枢）
+        // （否则切套冷静期一过，仍会把按新套反推的坐标当真源覆盖中枢）
         if let c2 = loadConf(), let s2 = makeGridSnapshot(conf: c2) {
             let f = s2["layoutFingerprint"] as? String ?? ""
             st["baselineFingerprint"] = f

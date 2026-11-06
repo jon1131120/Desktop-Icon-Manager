@@ -118,7 +118,7 @@ Desktop-Icon-Manager/
 │   └── check-layout.py          独立验证（越界/重叠/列位/行距）
 └── docs/
     ├── ARCHITECTURE.md          完整架构与设计决策
-    └── audits/                  问题总台账（十三轮审计 96 项，按类型归档）
+    └── audits/                  问题总台账（十四轮审计 60 项，按类型归档）
 ```
 
 ---
@@ -282,7 +282,7 @@ GET /status   → {ok, hasLayout, syncAt, sourceMachine, iconCount, archiveCount
 - **收敛稳定**：同步后 75 秒中枢零上报（不抖动）
 - **灾难恢复**：MINIPC 整机丢失不影响使用，三台各自有完整布局副本，任一台重新上报即可重建中枢
 
-问题与修复记录见 `docs/audits/问题总台账.md`（十三轮白纸审计，96 项按类型归档）。
+问题与修复记录见 `docs/audits/问题总台账.md`（十四轮白纸审计，60 项按类型归档）。
 
 ---
 
