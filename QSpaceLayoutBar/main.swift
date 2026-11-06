@@ -276,12 +276,16 @@ func saveLayout(named name: String, isAuto: Bool = false) {
     ]
     try? FileManager.default.createDirectory(atPath: layoutDir, withIntermediateDirectories: true)
     let url = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName).json")
+    guard JSONSerialization.isValidJSONObject(snapshot) else {
+        logLine("saveLayout: 快照含非法 JSON 类型，未写入（防进程崩溃）")
+        return
+    }
     guard let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted]) else {
         logLine("saveLayout: 序列化失败")
         return
     }
     do {
-        try data.write(to: url)
+        try data.write(to: url, options: .atomic)   // 原子写：崩溃不留半个 JSON
         logLine("saveLayout: 已写入「\(finalName)」(\(attrs.count) 图标)")
     } catch {
         logLine("saveLayout: 写入失败 \(error)")
@@ -396,7 +400,9 @@ func layoutContentFingerprint() -> String {
         let sc = (a["screen"] as? NSNumber)?.intValue ?? 1
         return "\(n)|\(x)|\(y)|\(sc)"
     }.sorted()
-    return String(parts.joined(separator: ";").hashValue, radix: 16)
+    // ⚠️ 必须用稳定哈希：Swift 的 String.hashValue 每次进程启动都不同（SipHash 随机种子），
+    // 拿它做「布局是否变化」判据 → 重启后必然误判为"变了" → 白白多存快照。
+    return fnv1a(parts.joined(separator: ";"))
 }
 
 /// 自动快照：本机布局指纹变化且距上次 ≥10 分钟才存一份。
@@ -440,7 +446,7 @@ func autoSnapshotIfNeeded() {
             let sc = (a["screen"] as? NSNumber)?.intValue ?? 1
             return "\(n)|\(x)|\(y)|\(sc)"
         }.sorted()
-        sameContent = String(parts.joined(separator: ";").hashValue, radix: 16) == fp
+        sameContent = fnv1a(parts.joined(separator: ";")) == fp   // 同样必须用稳定哈希
     }
     logLine("snapshot: 检查 fp=\(fp) files=\(files.count) newestAge=\(Int(newestAge/3600))h same=\(sameContent) needDaily=\(needDaily)")
 
@@ -541,7 +547,7 @@ func setLoginItem(_ on: Bool) {
             alert("开机自启：序列化 plist 失败"); return
         }
         do {
-            try data.write(to: URL(fileURLWithPath: launchAgentPlist))
+            try data.write(to: URL(fileURLWithPath: launchAgentPlist), options: .atomic)
         } catch {
             alert("开机自启：写入 plist 失败\n\(error)"); return
         }
@@ -814,6 +820,15 @@ func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
           let ctx = localGridContext(attrs: attrs) else { return nil }
     let spec = ctx.spec
     let singleScreen = isSingleScreenConf(attrs)
+    // 同名文件检测：桌面子目录里可能有同名文件（Desktop/A/report.pdf 与 Desktop/B/report.pdf），
+    // 只存文件名会让它们互相覆盖 → 中枢只记住一个、应用时两个都指到同一格。
+    // 规则：不重名存文件名（脱敏），重名改存「Desktop 下的相对路径」以区分。
+    var nameCounts: [String: Int] = [:]
+    for it in attrs where isDesktopItem(it) {
+        if let n = it["name"] as? String {
+            nameCounts[(n as NSString).lastPathComponent, default: 0] += 1
+        }
+    }
     var gridItems: [[String: Any]] = []
     for it in attrs {
         let sid = (it["screen"].map { "\($0)" }) ?? "1"
@@ -824,9 +839,12 @@ func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
               let y = (it["y"] as? NSNumber)?.doubleValue else { continue }
         let col = Int(((x - spec.x0) / spec.colStep).rounded()) + 1
         let row = Int(((y - spec.y0) / spec.rowStep).rounded()) + 1
-        // 脱敏：中枢只存「文件名」，不存完整绝对路径（避免泄露用户目录结构 / 敏感文件名）
-        let fileName = (name as NSString).lastPathComponent
-        gridItems.append(["name": fileName,
+        // 脱敏：优先只存文件名（不泄露用户目录结构）；只有重名时才退化为相对路径
+        let base = (name as NSString).lastPathComponent
+        let key: String = (nameCounts[base] ?? 0) > 1
+            ? String(name.dropFirst(desktopRootPath.count))   // 重名 → "A/report.pdf"
+            : base
+        gridItems.append(["name": key,
                           "col": max(1, min(spec.cols, col)),
                           "row": max(1, min(spec.rows, row))])
     }
@@ -870,8 +888,9 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
     var byName: [String: (Int, Int)] = [:]
     for g in gridItems {
         guard let n = g["name"] as? String, let c = g["col"] as? Int, let r = g["row"] as? Int else { continue }
-        byName[desktopRootPath + n] = (c, r)
-        byName[n] = (c, r)          // 兼容旧版（带完整路径）的快照
+        byName[desktopRootPath + n] = (c, r)   // n 是相对路径时 → 拼成完整路径
+        byName[n] = (c, r)                     // 文件名 或 相对路径
+        byName[(n as NSString).lastPathComponent] = (c, r)   // 兜底：只按文件名（重名时有歧义但不丢图标）
     }
     var out: [[String: Any]] = []
     var matched = 0, kept = 0, moved = 0
@@ -881,8 +900,9 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
         let fullName = it["name"] as? String ?? ""
         let name = (fullName as NSString).lastPathComponent   // 脱敏后中枢只给文件名 → 按文件名匹配
         let sid = (it["screen"].map { "\($0)" }) ?? "1"
+        let relName = fullName.hasPrefix(desktopRootPath) ? String(fullName.dropFirst(desktopRootPath.count)) : fullName
         guard isDesktopItem(it), (singleScreen || sid == ctx.screen.screenId),
-              let (c, r) = byName[name] ?? byName[fullName] else {
+              let (c, r) = byName[relName] ?? byName[name] ?? byName[fullName] else {
             out.append(ni)
             kept += 1
             continue
@@ -1114,6 +1134,11 @@ func httpGetJSON(_ urlStr: String, timeout: TimeInterval = 3) -> [String: Any]? 
 }
 
 func httpPostJSON(_ urlStr: String, body: [String: Any], timeout: TimeInterval = 3) -> [String: Any]? {
+    // NSJSONSerialization 对非法类型抛 NSException（try? 捕不住 → abort），必须先预检
+    guard JSONSerialization.isValidJSONObject(body) else {
+        logLine("httpPostJSON: body 含非法 JSON 类型，已拦截（防崩溃）")
+        return nil
+    }
     guard let u = URL(string: urlStr),
           let bd = try? JSONSerialization.data(withJSONObject: body) else { return nil }
     var req = URLRequest(url: u, timeoutInterval: timeout)
@@ -1469,16 +1494,17 @@ func verifyAfterApply(_ snap: [String: Any]) -> (ok: Bool, checked: Int, bad: In
           let dstKey = actual["specKey"] as? String, let dst = SPEC_ALL[dstKey],
           let sitems = snap["items"] as? [[String: Any]],
           let aitems = actual["items"] as? [[String: Any]] else { return (false, 0, 0, 0) }
+    // ⚠️ 重叠统计必须按「每个图标一次」计，不能按 amap 的键数计：
+    //    一个图标会同时写进「文件名」和「完整路径」两个键，按键数算会把重叠虚报成 2 倍。
+    var cellCount: [String: Int] = [:]
     var amap: [String: (Int, Int)] = [:]
     for a in aitems {
         if let n = a["name"] as? String, let c = a["col"] as? Int, let r = a["row"] as? Int {
             amap[(n as NSString).lastPathComponent] = (c, r)
             amap[n] = (c, r)
+            cellCount["\(c),\(r)", default: 0] += 1    // 逐图标计数（不是逐键）
         }
     }
-    // 同格重叠检测：一个格出现 ≥2 个图标 = QSpace 会把它们叠在一起（用户可见的重叠）
-    var cellCount: [String: Int] = [:]
-    for (_, pos) in amap { cellCount["\(pos.0),\(pos.1)", default: 0] += 1 }
     let overlap = cellCount.values.filter { $0 > 1 }.reduce(0) { $0 + ($1 - 1) }
     var checked = 0, bad = 0
     if overlap > 0 { logLine("verify: 检测到 \(overlap) 个图标与同格重叠") }
@@ -1831,7 +1857,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func saveClicked(_ sender: NSMenuItem) {
         promptName(title: "保存当前桌面布局", info: "给这套图标摆法起个名字（如：内置屏 / 外接屏 / 双屏）：") { name in
             saveLayout(named: name)
-            notify("已保存布局「\(name)」（\(currentFingerprint())）")
+            let realFp = layoutContentFingerprint()
+            notify("已保存布局「\(name)」（\(realFp.prefix(8))）")
         }
     }
 
@@ -1843,8 +1870,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         promptName(title: "重命名布局", info: "「\(oldName)」的新名字：", preset: oldName) { newName in
             let finalName = newName.hasPrefix("[") ? newName : machinePrefix + newName  // 保留机器归属前缀
             snap["name"] = finalName
+            guard JSONSerialization.isValidJSONObject(snap) else {
+                logLine("renameClicked: 快照含非法 JSON 类型，未写入（防崩溃）")
+                return
+            }
             if let data = try? JSONSerialization.data(withJSONObject: snap, options: [.prettyPrinted]) {
-                try? data.write(to: URL(fileURLWithPath: oldPath))
+                try? data.write(to: URL(fileURLWithPath: oldPath), options: .atomic)
                 let newPath = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName).json").path
                 if oldPath != newPath {
                     try? FileManager.default.removeItem(atPath: oldPath)
