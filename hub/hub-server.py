@@ -26,6 +26,8 @@ ALLOWED_SOURCES = {'MBP', 'Air', 'Studio'}
 _state_lock = threading.Lock()
 MAX_COORD = 1000         # 单轴坐标上限（SPEC 实际最大 21x9，留余量）
 GET_LOG_INTERVAL = 300  # 同一来源的 GET /layout 成功日志最多 5 分钟记一次（三台每 10 秒轮询 → 每天 2.6MB 噪声）
+# _get_log_at：dict 的单 key 读写在 CPython GIL 下是原子的，竞态最坏=多记一条日志，
+# 不影响正确性，故不加锁（加锁会让每 10 秒 GET 都抢锁，得不偿失）。
 _get_log_at = {}        # peer -> last ts         # 单轴坐标上限（SPEC 实际最大 21x9，留余量）
 SYNC_FUTURE_TOLERANCE = 300    # 时间戳最多允许超前 5 分钟（防未来时间戳永久锁死中枢）
 ALLOWED_NETS = [ipaddress.ip_network(n) for n in

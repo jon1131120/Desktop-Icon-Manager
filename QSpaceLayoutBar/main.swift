@@ -1275,7 +1275,11 @@ func saveSyncState(_ s: [String: Any]) {
 /// 上报本机布局到中枢（后改赢；被拒说明中枢有更新的版本，下一轮拉取）
 func broadcastIfNeeded() {
     guard autoSyncOn else { return }
-    guard let conf = loadConf() else { return }
+    guard let conf = loadConf() else {
+        // 异常态不能静默：conf 读不到会让同步"看起来在跑但什么都不发"
+        logLine("sync: 广播跳过（desktop.conf 读不到或损坏），本轮不发")
+        return
+    }
     guard var snap = makeGridSnapshot(conf: conf) else {
         logLine("⚠️ 快照生成失败（localGridContext 无可用屏组），本轮跳过")
         return
@@ -1327,7 +1331,13 @@ func broadcastIfNeeded() {
     if fp == baseline { return }
     if fp == lastBC { return }
     // 保护窗退避中：对方在操作，等窗开后自动重报（baseline 未动，改动不会丢）
-    if now < rt.protectBackoffUntil { return }
+    if now < rt.protectBackoffUntil {
+        if rt.lastSeenFp != rt.lastLocalFpLogged {   // 只在 fp 变化时记一次，不刷屏
+            rt.lastLocalFpLogged = rt.lastSeenFp
+            logLine("sync: 保护窗退避中（还有 \(rt.protectBackoffUntil - now) 秒），本机改动暂存待重报")
+        }
+        return
+    }
 
     // ② 切套冷静期：屏幕刚变（开合盖/插拔外接），本机 fp 变化不是用户改布局 —— 绝不上报，
     //    否则会把"按新套反推的歪坐标"当成真源覆盖中枢（实测导致开合盖后不生效）
@@ -1604,7 +1614,7 @@ func checkSpecChange() {
     let key = ctx.spec.key
     if rt.lastSpecKey.isEmpty { rt.lastSpecKey = key; return }
     if key != rt.lastSpecKey {
-        logLine("sync: 屏幕切换 \(rt.lastSpecKey) → \(key)，冷静 20 秒并用新套强制重应用")
+        logLine("sync: 屏幕切换 \(rt.lastSpecKey) → \(key)，冷静 120 秒并用新套强制重应用")
         rt.lastSpecKey = key
         specChangedAt = Int(Date().timeIntervalSince1970)
         forceApplyOnce = true
@@ -1640,6 +1650,7 @@ final class SyncRuntime: @unchecked Sendable {
     private var _lastRemoteApplyAt = 0     // 最近一次「应用远端」时刻：其后的坐标变化是重排回声，不算用户拖动
     private var _lastSeenItems: [String: (Int, Int)] = [:]  // 上一轮 items 映射：区分「拖动」与「文件增删」
     private var _protectBackoffUntil = 0   // 保护窗被拒后的重报退避（本机时间轴）
+    private var _lastLocalFpLogged = ""     // 退避日志去重（只在 fp 变化时记一次）
     var lastRemoteApplyAt: Int {
         get { lock.lock(); defer { lock.unlock() }; return _lastRemoteApplyAt }
         set { lock.lock(); _lastRemoteApplyAt = newValue; lock.unlock() }
@@ -1651,6 +1662,10 @@ final class SyncRuntime: @unchecked Sendable {
     var protectBackoffUntil: Int {
         get { lock.lock(); defer { lock.unlock() }; return _protectBackoffUntil }
         set { lock.lock(); _protectBackoffUntil = newValue; lock.unlock() }
+    }
+    var lastLocalFpLogged: String {
+        get { lock.lock(); defer { lock.unlock() }; return _lastLocalFpLogged }
+        set { lock.lock(); _lastLocalFpLogged = newValue; lock.unlock() }
     }
     private var _syncState: [String: Any] = [:]
 
