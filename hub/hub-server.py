@@ -254,6 +254,25 @@ class H(BaseHTTPRequestHandler):
         cnt = len(items)
         cur = load_latest()
         cur_at = int(cur.get('syncAt', 0) or 0) if cur else 0
+        # ---- 操作优先保护窗 ----
+        # userActiveUntil：客户端「用户最后一次拖动布局」+10 分钟（已含时钟补偿）。
+        # 规则：不带用户操作标记的上报（自动回声/iCloud 文件增删）不许覆盖
+        # 「另一台机器的用户正在操作」时发出的版本——否则用户刚拖好的布局会被
+        # 闲置机器的联动上报在 1 秒内洗掉（2026-11-07 02:06 实测）。
+        inc_active = int(data.get('userActiveUntil', 0) or 0) > now
+        cur_active = (int(cur.get('userActiveUntil', 0) or 0) > now) if cur else False
+        if cur and not inc_active and cur_active:
+            cur_m = str(cur.get('userActiveMachine') or cur.get('sourceMachine') or '?')
+            until_v = int(cur.get('userActiveUntil', 0) or 0)
+            logger.info("POST /layout  %s @ %s  -> REJECTED (protected: %s user-active until %s)",
+                        src, peer_name(self.client_address[0]), cur_m, until_v)
+            self._json(200, {'accepted': False, 'reason': 'protected', 'by': cur_m, 'userActiveUntil': until_v})
+            return
+        if inc_active:
+            data['userActiveMachine'] = src
+        else:
+            data['userActiveUntil'] = 0
+            data['userActiveMachine'] = ''
         if at <= cur_at:
             logger.info("POST /layout  %s @ %s  syncAt=%d items=%d  -> REJECTED (hub has %d from %s)",
                         src, peer_name(self.client_address[0]), at, cnt, cur_at, cur.get('sourceMachine') if cur else '-')

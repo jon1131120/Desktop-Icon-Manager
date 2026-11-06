@@ -1101,6 +1101,7 @@ func fixOverlapsIfNeeded() -> Bool {
     overlapFixStreak += 1
     logLine("overlap: 本机 \(r.patched) 个重叠图标已自动推开（第 \(overlapFixStreak) 次）")
     rt.applyingRemote = true
+    rt.lastRemoteApplyAt = Int(Date().timeIntervalSince1970)   // 重叠修复也会挪坐标 → 同样豁免
     defer { rt.applyingRemote = false }   // 必须 defer：中途任何 return/异常都不能把标志位卡在 true
     atomicWriteConfAndRestartQSpace(r.newConf)
     // 不重置 baseline：让 broadcastIfNeeded 自然检测到 fp 变化 → 10 秒防抖后上报
@@ -1298,8 +1299,25 @@ func broadcastIfNeeded() {
     // ① 只在指纹「真正变化的那一刻」刷新计时：连续拖动时每次变化都重置，停手满 10 秒才上报。
     //    绝不能每轮无条件刷新（fp 会持续 != baseline，那样永远等不到 10 秒，实测导致永不同步）
     if fp != rt.lastSeenFp {
+        // ⭐ 区分变化来源（决定是否给「用户操作保护窗」标记）：
+        //   共有文件的坐标变化      = 用户拖动       → 标记 active（10 分钟保护窗）
+        //   只有文件增删（集合变化） = iCloud 内容同步 → 不标记（闲置机不许借它抢覆盖权）
+        //   应用远端 120s 内的坐标变 = QSpace 重排回声 → 不标记（否则回声循环永不停）
+        let curPairs = (snap["items"] as? [[String: Any]] ?? []).compactMap { g -> (String, Int, Int)? in
+            guard let n = g["name"] as? String, let c = g["col"] as? Int, let r = g["row"] as? Int else { return nil }
+            return (n, c, r)
+        }
+        var movedExisting = 0
+        for (n, c, r) in curPairs {
+            if let old = rt.lastSeenItems[n], old != (c, r) { movedExisting += 1 }
+        }
+        let remoteEcho = now - rt.lastRemoteApplyAt < 120
+        if movedExisting > 0 && !remoteEcho && now - specChangedAt >= 20 {
+            rt.lastLocalChangeAt = now
+            logLine("sync: 检测到用户拖动（\(movedExisting) 个图标位移）→ 本机进入 10 分钟操作保护窗")
+        }
         rt.lastSeenFp = fp
-        if now - specChangedAt >= 20 { rt.lastLocalChangeAt = now }   // 切套冷静期内的变化不算用户拖动
+        rt.lastSeenItems = Dictionary(curPairs.map { ($0.0, ($0.1, $0.2)) }, uniquingKeysWith: { a, _ in a })
     }
 
     if fp == baseline { return }
@@ -1346,6 +1364,8 @@ func broadcastIfNeeded() {
     let clockOffset = st["clockOffset"] as? Int ?? 0
     snap["syncAt"] = now + clockOffset
     snap["sourceMachine"] = machineTag
+    // 操作保护窗标记：最后拖动 +10 分钟（中枢据此拒绝闲置机的覆盖性上报）
+    snap["userActiveUntil"] = rt.lastLocalChangeAt > 0 ? rt.lastLocalChangeAt + 600 + clockOffset : 0
     let items = gitems.count
     var resp = hubPost(body: snap)
 
@@ -1388,6 +1408,19 @@ func broadcastIfNeeded() {
         // 本机就是这份布局，同步记为"已生效"，避免下一轮 pull 把自己再应用一遍
         st["lastAppliedFingerprint"] = fp
         st["lastAppliedAt"] = now
+    } else if let reason = resp["reason"] as? String, reason == "protected" {
+        // ⭐ 保护窗拒绝：另一台机器的用户正在操作（最长 10 分钟）。
+        //    正确姿势不是硬重推，而是「跟随对方」：本轮不重试、下轮正常拉取应用对方版本。
+        //    本机用户若继续拖，fp 再变且带 active 标记 → 到时双方都 active，后改者赢，用户赢。
+        let by = resp["by"] as? String ?? "?"
+        let until = resp["userActiveUntil"] as? Int ?? 0
+        logLine("sync: 上报被保护窗拒绝（\(by) 用户操作中，至 \(until)）→ 跟随对方版本，本机改动暂存")
+        rt.skipPullOnce = false                 // 下轮要拉对方的版本应用
+        hubNextRetryAt = until > now ? until + 5 : now + 30
+        st["baselineFingerprint"] = fp          // 记为已知，避免每 10 秒重复撞保护窗
+        saveSyncState(st)
+        hubFailStreak = 0
+        return
     } else {
         // ⚠️ 被拒说明中枢有同秒或更新的版本（同步时钟 + 同秒碰撞）。
         //    旧实现直接把 baseline 设成 fp → 本机改动被永久抑制，
@@ -1481,6 +1514,7 @@ func applyRemote(_ snap: [String: Any], fp: String, file: String) {
         return
     }
     rt.applyingRemote = true
+    rt.lastRemoteApplyAt = Int(Date().timeIntervalSince1970)   // 之后 120s 内的坐标变化是重排回声
     defer { rt.applyingRemote = false }   // 必须 defer：中途 return 不能把标志位卡在 true
     appDelegate?.setBusy(true)
     let src = snap["sourceMachine"] as? String ?? file
@@ -1591,6 +1625,16 @@ final class SyncRuntime: @unchecked Sendable {
     private var _lastSpecKey = ""          // 当前套
     private var _applyingRemote = false    // 防重入
     private var _skipPullOnce = false      // 上报被拒 → 本轮不拉远端（否则远端会盖掉本机刚改的）
+    private var _lastRemoteApplyAt = 0     // 最近一次「应用远端」时刻：其后的坐标变化是重排回声，不算用户拖动
+    private var _lastSeenItems: [String: (Int, Int)] = [:]  // 上一轮 items 映射：区分「拖动」与「文件增删」
+    var lastRemoteApplyAt: Int {
+        get { lock.lock(); defer { lock.unlock() }; return _lastRemoteApplyAt }
+        set { lock.lock(); _lastRemoteApplyAt = newValue; lock.unlock() }
+    }
+    var lastSeenItems: [String: (Int, Int)] {
+        get { lock.lock(); defer { lock.unlock() }; return _lastSeenItems }
+        set { lock.lock(); _lastSeenItems = newValue; lock.unlock() }
+    }
     private var _syncState: [String: Any] = [:]
 
     var suppressUntil: Int {
