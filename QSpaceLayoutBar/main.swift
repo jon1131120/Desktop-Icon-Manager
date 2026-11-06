@@ -1614,7 +1614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let syncT = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in runSyncCycle() }
         RunLoop.main.add(syncT, forMode: .common)
 
-        // 「时光机监测」已废弃：自动存档属旧「分电脑快照」体系，改为只在手动保存时存档。
+        // 时光机：autoSnapshotIfNeeded() 在轮询里自动留历史，菜单「🕐 自动备份历史」可回滚。
         // 原实现每 30 分钟调用一个空函数 monitorLayoutChanges()，纯属空转，已整块移除。
 
         rebuildMenu()          // 先用缓存（可能为空）秒建菜单，绝不阻塞启动
@@ -1670,6 +1670,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             info.isEnabled = false
             menu.addItem(info)
         }
+        menu.addItem(.separator())
+
+        // 🕐 自动备份历史（时光机）：只列本机自动快照，最近 15 份，点一条直接恢复
+        let autoURLs = layoutURLs().compactMap { url -> (URL, String, Date)? in
+            guard let d = FileManager.default.contents(atPath: url.path),
+                  let snap = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  (snap["isAuto"] as? Bool) == true else { return nil }
+            let name = snap["name"] as? String ?? url.deletingPathExtension().lastPathComponent
+            guard name.hasPrefix(machinePrefix) else { return nil }   // 只看本机
+            let mt = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date) ?? Date.distantPast
+            return (url, name, mt ?? Date.distantPast)
+        }.sorted { $0.2 > $1.2 }
+
+        if !autoURLs.isEmpty {
+            let shown = autoURLs.prefix(15)
+            let hist = NSMenuItem(title: "🕐 自动备份历史（\(autoURLs.count) 份）", action: nil, keyEquivalent: "")
+            let hs = NSMenu()
+            let dfh = DateFormatter(); dfh.dateFormat = "MM-dd HH:mm"
+            for (url, name, mt) in shown {
+                // 标题去掉前缀，只留时间，避免太长
+                let short = name.replacingOccurrences(of: machinePrefix + autoPrefix, with: "")
+                let it = NSMenuItem(title: "\(dfh.string(from: mt))  \(short)",
+                                    action: #selector(restoreClicked(_:)), keyEquivalent: "")
+                it.target = self; it.representedObject = url.path
+                hs.addItem(it)
+            }
+            if autoURLs.count > 15 {
+                hs.addItem(.separator())
+                let more = NSMenuItem(title: "（更早的 \(autoURLs.count - 15) 份在 iCloud/qspace-layouts）", action: nil, keyEquivalent: "")
+                more.isEnabled = false
+                hs.addItem(more)
+            }
+            hist.submenu = hs
+            menu.addItem(hist)
+        }
+
         menu.addItem(.separator())
 
         // 手动方案（子菜单：应用/重命名/删除）
