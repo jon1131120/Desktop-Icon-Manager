@@ -71,6 +71,10 @@ func loadConf() -> [String: Any]? {
 }
 
 func writeConf(_ conf: [String: Any]) {
+    guard JSONSerialization.isValidJSONObject(conf) else {
+        logLine("writeConf: conf 含非法 JSON 类型，未写入（防进程崩溃）")
+        return
+    }
     guard let data = try? JSONSerialization.data(withJSONObject: conf, options: [.prettyPrinted]) else {
         logLine("writeConf: 序列化失败，未写入")
         return
@@ -371,6 +375,53 @@ func restoreLayout(at url: URL, restart: Bool = true) {
 func autoSwitchIfNeeded() {
     // 已废弃：分电脑快照自动切换已由「中枢统一布局 + 屏幕切套」取代
     return
+}
+
+
+// MARK: - 自动快照（时光机）：布局变化时自动留历史，供回滚
+
+/// 两条自动快照的最小间隔（避免连续拖动产生大量快照）
+let minMinutesBetweenAutoSnapshots: TimeInterval = 10 * 60
+var lastAutoSnapshotAt: TimeInterval = 0
+
+/// 自动快照：本机布局指纹变化且距上次 ≥10 分钟才存一份。
+/// 只清本机前缀的旧自动快照，保留 maxAutoSnapshots 份。
+func autoSnapshotIfNeeded() {
+    let now = Date().timeIntervalSince1970
+    guard now - lastAutoSnapshotAt >= minMinutesBetweenAutoSnapshots else { return }
+    let fp = currentFingerprint()
+    guard !fp.isEmpty else { return }
+
+    // 与本机最新一份自动快照比对，指纹相同就不重复存
+    let fm = FileManager.default
+    let files = ((try? fm.contentsOfDirectory(atPath: layoutDir)) ?? [])
+        .filter { $0.hasPrefix(machinePrefix + autoPrefix) && $0.hasSuffix(".json") }
+        .sorted(by: >)
+    if let newest = files.first,
+       let d = fm.contents(atPath: layoutDir + "/" + newest),
+       let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+       (o["fingerprint"] as? String) == fp {
+        lastAutoSnapshotAt = now      // 内容没变也算"刚检查过"，避免每分钟重算
+        return
+    }
+
+    saveLayout(named: "", isAuto: true)
+    lastAutoSnapshotAt = now
+    logLine("snapshot: 自动快照已存（共 \(files.count + 1) 份本机自动快照）")
+    pruneAutoSnapshots()
+}
+
+/// 只删本机前缀的自动快照，保留最近 maxAutoSnapshots 份（别动的其它机器的）
+func pruneAutoSnapshots() {
+    let fm = FileManager.default
+    let auto = ((try? fm.contentsOfDirectory(atPath: layoutDir)) ?? [])
+        .filter { $0.hasPrefix(machinePrefix + autoPrefix) && $0.hasSuffix(".json") }
+        .sorted(by: >)
+    guard auto.count > maxAutoSnapshots else { return }
+    for old in auto.dropFirst(maxAutoSnapshots) {
+        try? fm.removeItem(atPath: layoutDir + "/" + old)
+        logLine("snapshot: 清理旧自动快照「\(old)」")
+    }
 }
 
 // MARK: - 微拖拽纠错（恢复重启后模拟 1px 拖拽，触发 QSpace snapToGrid 自动对齐）
@@ -1100,6 +1151,13 @@ func loadSyncState() -> [String: Any] {
 func saveSyncState(_ s: [String: Any]) {
     let dir = NSString(string: "~/qspace-layouts").expandingTildeInPath
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    // ⚠️ NSJSONSerialization 对非法类型（ArraySlice / NaN / 自定义类型）抛的是
+    // **NSException 而不是 Swift Error**，`try?` 捕不住 → 直接 abort 进程。
+    // 必须先 isValidJSONObject 预检。
+    guard JSONSerialization.isValidJSONObject(s) else {
+        logLine("saveSyncState: 状态含非法 JSON 类型，本次跳过写入（防进程崩溃）")
+        return
+    }
     guard let d = try? JSONSerialization.data(withJSONObject: s, options: [.prettyPrinted]) else { return }
     // 原子写：崩溃时 sync-state.json 不会被截断成半个 JSON
     // （非原子写一旦中途崩溃 → 文件损坏 → loadSyncState 返回 {} → 状态全丢，
@@ -1229,7 +1287,9 @@ func broadcastIfNeeded() {
         st["lastBroadcastFingerprint"] = fp
         st["lastBroadcastAt"] = now
         // 写入时截断到最近 60 秒，防止数组随长期运行无限膨胀（风暴保护只看 60 秒窗口）
-        st["recentBroadcasts"] = (recent + [now]).suffix(20)
+        // ⚠️ 必须包成 Array：suffix() 返回 ArraySlice<Int>，JSONSerialization
+        // 不认识该类型 → 抛 NSException（try? 捕不住）→ 进程 abort。
+        st["recentBroadcasts"] = Array((recent + [now]).suffix(20))
         // 本机就是这份布局，同步记为"已生效"，避免下一轮 pull 把自己再应用一遍
         st["lastAppliedFingerprint"] = fp
         st["lastAppliedAt"] = now
@@ -1473,6 +1533,7 @@ func runSyncCycle() {
     syncQueue.async {
         checkSpecChange()
         _ = fixOverlapsIfNeeded()   // 本机重叠（QSpace 新建文件放重）→ 自动推开
+        autoSnapshotIfNeeded()      // 时光机：布局变化时留历史（限流 10 分钟）
         broadcastIfNeeded()
         let remote = fetchRemote()          // 网络在后台线程
         guard let r = remote else {
