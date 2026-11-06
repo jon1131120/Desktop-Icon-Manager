@@ -392,12 +392,23 @@ func autoSnapshotIfNeeded() {
     let fp = currentFingerprint()
     guard !fp.isEmpty else { return }
 
-    // 与本机最新一份自动快照比对，指纹相同就不重复存
     let fm = FileManager.default
     let files = ((try? fm.contentsOfDirectory(atPath: layoutDir)) ?? [])
         .filter { $0.hasPrefix(machinePrefix + autoPrefix) && $0.hasSuffix(".json") }
         .sorted(by: >)
+
+    // 保底：距本机最新一份自动快照超过 24 小时，即使布局没变也存一份
+    // （防「本地一直没动 → 没有历史 → 万一被远端/误操作改坏就无从回滚」）
+    var newestAge: TimeInterval = .greatestFiniteMagnitude
     if let newest = files.first,
+       let attrs = try? fm.attributesOfItem(atPath: layoutDir + "/" + newest),
+       let mt = attrs[.modificationDate] as? Date {
+        newestAge = now - mt.timeIntervalSince1970
+    }
+    let needDaily = newestAge >= 24 * 3600
+
+    // 指纹相同且不满足保底 → 跳过
+    if !needDaily, let newest = files.first,
        let d = fm.contents(atPath: layoutDir + "/" + newest),
        let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
        (o["fingerprint"] as? String) == fp {
