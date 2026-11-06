@@ -23,6 +23,14 @@ deploy_one() {
     local H="$1"; local FIRST="${2:-0}"
     log "=== 部署到 ${H} 首次=${FIRST} ==="
 
+    # 机器标识：写显式文件，machineTag 不再依赖 hostname 字符串匹配
+    # （JondeMacBook-Pro 含连字符匹配不到 "macbookpro"，实测 MBP 因此退化成 hostname 本身）
+    local TAG
+    case "$H" in
+        mbp) TAG="MBP" ;; air) TAG="Air" ;; studio) TAG="Studio" ;;
+        *)   TAG="$(echo "$H" | tr -d '[:punct:][:space:]' | tr '[:lower:]' '[:upper:]')" ;;
+    esac
+
     # 本机判断：hostname 不会等于 ssh 别名，用「本机已装且 ssh 到自己」的等价判断
     local IS_LOCAL=0
     [ "$H" = "local" ] && IS_LOCAL=1
@@ -30,6 +38,8 @@ deploy_one() {
     [ "$H" = "air" ] && [ "$(scutil --get ComputerName 2>/dev/null)" = "Jon的MacBook Air" ] && IS_LOCAL=1
     [ "$H" = "studio" ] && [ "$(scutil --get ComputerName 2>/dev/null)" = "Mac Studio" ] && IS_LOCAL=1
     if [ "$IS_LOCAL" = "1" ]; then
+        mkdir -p "$HOME/qspace-layouts"
+        printf '%s' "$TAG" > "$HOME/qspace-layouts/machine-tag.txt"
         log "本机部署"
         launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
         killall QSpaceLayoutBar 2>/dev/null || true
@@ -46,8 +56,9 @@ deploy_one() {
         log "远程部署 ${H}"
         scp -q -r "$APP_SRC" "$H:/tmp/"
         if [ "$FIRST" = "1" ]; then
-            log "首次部署: 建目录+分发令牌+装plist"
+            log "首次部署: 建目录+分发令牌+机器标识+装plist"
             ssh -o BatchMode=yes "$H" "mkdir -p ~/qspace-layouts"
+            printf '%s' "$TAG" | ssh -o BatchMode=yes "$H" "cat > ~/qspace-layouts/machine-tag.txt"
             scp -q "$TOKEN_SRC" "$H:~/qspace-layouts/hub-token.txt"
             ssh -o BatchMode=yes "$H" "chmod 600 ~/qspace-layouts/hub-token.txt"
             scp -q "$HOME/Library/LaunchAgents/$LABEL.plist" "$H:~/Library/LaunchAgents/" 2>/dev/null || \

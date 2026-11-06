@@ -1284,6 +1284,31 @@ func broadcastIfNeeded() {
     var st = loadSyncState()
     // ⭐ 吸收期（应用远端 + QSpace 重启重排期间）：把当前指纹持续记为"已知"，绝不上报。
     //    否则 QSpace 排完盘产生的指纹变化会被当成用户拖动 → 覆盖中枢 → 其他机器再应用 → 死循环
+    // ⓪ 采样必须**永远**执行（含吸收期）：
+    //   吸收期若跳过采样，吸收期结束后的第一次对比会把「应用远端造成的全部位移」
+    //   当成新增量；一旦超过 120s 回声豁免窗口，就会被误判成用户拖动 → 误进保护窗
+    //   → 长周期回声循环复活（2026-11-07 复核发现）。
+    if fp != rt.lastSeenFp {
+        let curPairs = (snap["items"] as? [[String: Any]] ?? []).compactMap { g -> (String, Int, Int)? in
+            guard let n = g["name"] as? String, let c = g["col"] as? Int, let r = g["row"] as? Int else { return nil }
+            return (n, c, r)
+        }
+        var movedExisting = 0
+        for (n, c, r) in curPairs {
+            if let old = rt.lastSeenItems[n], old != (c, r) { movedExisting += 1 }
+        }
+        // 回声豁免 = 应用远端 120s 内；切套余波豁免 = 切套 120s 内
+        // （QSpace 大规模重排可持续半分钟以上，原 20s 冷静期挡不住尾段，复核时改为 120s）
+        let remoteEcho = now - rt.lastRemoteApplyAt < 120
+        let specEcho = now - specChangedAt < 120
+        if movedExisting > 0 && !remoteEcho && !specEcho {
+            rt.lastLocalChangeAt = now
+            logLine("sync: 检测到用户拖动（\(movedExisting) 个图标位移）→ 本机进入 10 分钟操作保护窗")
+        }
+        rt.lastSeenFp = fp
+        rt.lastSeenItems = Dictionary(curPairs.map { ($0.0, ($0.1, $0.2)) }, uniquingKeysWith: { a, _ in a })
+    }
+
     let supUntil = max(rt.suppressUntil, st["suppressBroadcastUntil"] as? Int ?? 0)
     if now < supUntil {
         if fp != (st["baselineFingerprint"] as? String ?? "") {
@@ -1296,32 +1321,10 @@ func broadcastIfNeeded() {
     let baseline = st["baselineFingerprint"] as? String ?? ""
     let lastBC = st["lastBroadcastFingerprint"] as? String ?? ""
 
-    // ① 只在指纹「真正变化的那一刻」刷新计时：连续拖动时每次变化都重置，停手满 10 秒才上报。
-    //    绝不能每轮无条件刷新（fp 会持续 != baseline，那样永远等不到 10 秒，实测导致永不同步）
-    if fp != rt.lastSeenFp {
-        // ⭐ 区分变化来源（决定是否给「用户操作保护窗」标记）：
-        //   共有文件的坐标变化      = 用户拖动       → 标记 active（10 分钟保护窗）
-        //   只有文件增删（集合变化） = iCloud 内容同步 → 不标记（闲置机不许借它抢覆盖权）
-        //   应用远端 120s 内的坐标变 = QSpace 重排回声 → 不标记（否则回声循环永不停）
-        let curPairs = (snap["items"] as? [[String: Any]] ?? []).compactMap { g -> (String, Int, Int)? in
-            guard let n = g["name"] as? String, let c = g["col"] as? Int, let r = g["row"] as? Int else { return nil }
-            return (n, c, r)
-        }
-        var movedExisting = 0
-        for (n, c, r) in curPairs {
-            if let old = rt.lastSeenItems[n], old != (c, r) { movedExisting += 1 }
-        }
-        let remoteEcho = now - rt.lastRemoteApplyAt < 120
-        if movedExisting > 0 && !remoteEcho && now - specChangedAt >= 20 {
-            rt.lastLocalChangeAt = now
-            logLine("sync: 检测到用户拖动（\(movedExisting) 个图标位移）→ 本机进入 10 分钟操作保护窗")
-        }
-        rt.lastSeenFp = fp
-        rt.lastSeenItems = Dictionary(curPairs.map { ($0.0, ($0.1, $0.2)) }, uniquingKeysWith: { a, _ in a })
-    }
-
     if fp == baseline { return }
     if fp == lastBC { return }
+    // 保护窗退避中：对方在操作，等窗开后自动重报（baseline 未动，改动不会丢）
+    if now < rt.protectBackoffUntil { return }
 
     // ② 切套冷静期：屏幕刚变（开合盖/插拔外接），本机 fp 变化不是用户改布局 —— 绝不上报，
     //    否则会把"按新套反推的歪坐标"当成真源覆盖中枢（实测导致开合盖后不生效）
@@ -1414,10 +1417,14 @@ func broadcastIfNeeded() {
         //    本机用户若继续拖，fp 再变且带 active 标记 → 到时双方都 active，后改者赢，用户赢。
         let by = resp["by"] as? String ?? "?"
         let until = resp["userActiveUntil"] as? Int ?? 0
-        logLine("sync: 上报被保护窗拒绝（\(by) 用户操作中，至 \(until)）→ 跟随对方版本，本机改动暂存")
-        rt.skipPullOnce = false                 // 下轮要拉对方的版本应用
-        hubNextRetryAt = until > now ? until + 5 : now + 30
-        st["baselineFingerprint"] = fp          // 记为已知，避免每 10 秒重复撞保护窗
+        logLine("sync: 上报被保护窗拒绝（\(by) 用户操作中）→ 先跟随对方，窗开后自动重报本机版本")
+        // ⭐ 绝不能把 baseline 设成 fp：那会把本机这次真实改动"记为已同步"而永久吞掉。
+        //    正确姿势：保留 baseline（fp 仍 != baseline），只是推迟到对方保护窗结束后重报
+        //    → 到时若对方窗已开，本机改动照常被接受（用户赢回）；若对方还在操作 → 再等（拉锯到最后停手者赢）
+        rt.skipPullOnce = false                 // 下轮先拉对方的版本应用（跟随）
+        // until 是中枢时间轴（含对方 clockOffset），换算回本机轴再退避，避免时钟偏差导致多等/少等
+        let localUntil = until - (st["clockOffset"] as? Int ?? 0)
+        rt.protectBackoffUntil = localUntil > now ? localUntil + 5 : now + 30
         saveSyncState(st)
         hubFailStreak = 0
         return
@@ -1627,6 +1634,7 @@ final class SyncRuntime: @unchecked Sendable {
     private var _skipPullOnce = false      // 上报被拒 → 本轮不拉远端（否则远端会盖掉本机刚改的）
     private var _lastRemoteApplyAt = 0     // 最近一次「应用远端」时刻：其后的坐标变化是重排回声，不算用户拖动
     private var _lastSeenItems: [String: (Int, Int)] = [:]  // 上一轮 items 映射：区分「拖动」与「文件增删」
+    private var _protectBackoffUntil = 0   // 保护窗被拒后的重报退避（本机时间轴）
     var lastRemoteApplyAt: Int {
         get { lock.lock(); defer { lock.unlock() }; return _lastRemoteApplyAt }
         set { lock.lock(); _lastRemoteApplyAt = newValue; lock.unlock() }
@@ -1634,6 +1642,10 @@ final class SyncRuntime: @unchecked Sendable {
     var lastSeenItems: [String: (Int, Int)] {
         get { lock.lock(); defer { lock.unlock() }; return _lastSeenItems }
         set { lock.lock(); _lastSeenItems = newValue; lock.unlock() }
+    }
+    var protectBackoffUntil: Int {
+        get { lock.lock(); defer { lock.unlock() }; return _protectBackoffUntil }
+        set { lock.lock(); _protectBackoffUntil = newValue; lock.unlock() }
     }
     private var _syncState: [String: Any] = [:]
 

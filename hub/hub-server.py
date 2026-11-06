@@ -5,7 +5,8 @@
 - GET  /status : 健康状态
 存储：~/qspace-hub/layout.json（唯一真源）+ archive/YYYYMMDD-HHMMSS-机器.json（保留 20 份）
 """
-import json, os, time, datetime, logging, ipaddress, hmac, secrets
+import json
+import threading, os, time, datetime, logging, ipaddress, hmac, secrets
 from logging.handlers import RotatingFileHandler
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -16,6 +17,10 @@ PORT = 18878
 MAX_ARCHIVE = 20
 MAX_BODY = 1_000_000          # 请求体上限 1MB，防超大 JSON 打爆内存
 MAX_ITEMS = 500
+
+# 状态锁：ThreadingHTTPServer 多线程，「load→保护窗判断→syncAt 比较→save」必须原子，
+# 否则旧 syncAt 后写会覆盖新 syncAt（实测 02:06:06/08 两台仅差 2 秒，竞态真实可触发）
+_state_lock = threading.Lock()
 MAX_COORD = 1000         # 单轴坐标上限（SPEC 实际最大 21x9，留余量）
 GET_LOG_INTERVAL = 300  # 同一来源的 GET /layout 成功日志最多 5 分钟记一次（三台每 10 秒轮询 → 每天 2.6MB 噪声）
 _get_log_at = {}        # peer -> last ts         # 单轴坐标上限（SPEC 实际最大 21x9，留余量）
@@ -252,41 +257,47 @@ class H(BaseHTTPRequestHandler):
             self._json(400, {'error': f'{len(bad)} malformed items (need name:str, col:int 1-{MAX_COORD}, row:int 1-{MAX_COORD})'})
             return
         cnt = len(items)
-        cur = load_latest()
-        cur_at = int(cur.get('syncAt', 0) or 0) if cur else 0
-        # ---- 操作优先保护窗 ----
-        # userActiveUntil：客户端「用户最后一次拖动布局」+10 分钟（已含时钟补偿）。
-        # 规则：不带用户操作标记的上报（自动回声/iCloud 文件增删）不许覆盖
-        # 「另一台机器的用户正在操作」时发出的版本——否则用户刚拖好的布局会被
-        # 闲置机器的联动上报在 1 秒内洗掉（2026-11-07 02:06 实测）。
-        inc_active = int(data.get('userActiveUntil', 0) or 0) > now
-        cur_active = (int(cur.get('userActiveUntil', 0) or 0) > now) if cur else False
-        if cur and not inc_active and cur_active:
-            cur_m = str(cur.get('userActiveMachine') or cur.get('sourceMachine') or '?')
-            until_v = int(cur.get('userActiveUntil', 0) or 0)
-            logger.info("POST /layout  %s @ %s  -> REJECTED (protected: %s user-active until %s)",
-                        src, peer_name(self.client_address[0]), cur_m, until_v)
-            self._json(200, {'accepted': False, 'reason': 'protected', 'by': cur_m, 'userActiveUntil': until_v})
-            return
-        if inc_active:
-            data['userActiveMachine'] = src
-        else:
-            data['userActiveUntil'] = 0
-            data['userActiveMachine'] = ''
-        if at <= cur_at:
-            logger.info("POST /layout  %s @ %s  syncAt=%d items=%d  -> REJECTED (hub has %d from %s)",
-                        src, peer_name(self.client_address[0]), at, cnt, cur_at, cur.get('sourceMachine') if cur else '-')
-            self._json(200, {'accepted': False, 'reason': 'older', 'latestSyncAt': cur_at})
-            return
-        try:
-            save_latest(data)
-        except Exception as e:
-            logger.error("POST /layout  %s @ %s  save FAILED: %s", src, peer_name(self.client_address[0]), e)
-            self._json(500, {'error': 'save failed'})
-            return
-        logger.info("POST /layout  %s @ %s  syncAt=%d items=%d  -> ACCEPTED (fp=%s)",
-                    src, peer_name(self.client_address[0]), at, cnt, str(data.get('layoutFingerprint', ''))[:8])
-        self._json(200, {'accepted': True, 'syncAt': at})
+        with _state_lock:
+            cur = load_latest()
+            cur_at = int(cur.get('syncAt', 0) or 0) if cur else 0
+            # ---- 操作优先保护窗 ----
+            # userActiveUntil：客户端「用户最后一次拖动布局」+10 分钟（已含时钟补偿）。
+            # 规则：不带用户操作标记的上报（自动回声/iCloud 文件增删）不许覆盖
+            # 「另一台机器的用户正在操作」时发出的版本——否则用户刚拖好的布局会被
+            # 闲置机器的联动上报在 1 秒内洗掉（2026-11-07 02:06 实测）。
+            def _to_int(v, default=0):
+                try:
+                    return int(v)
+                except (TypeError, ValueError):
+                    return default
+            inc_active = _to_int(data.get('userActiveUntil', 0)) > now
+            cur_active = (_to_int(cur.get('userActiveUntil', 0)) > now) if cur else False
+            if cur and not inc_active and cur_active:
+                cur_m = str(cur.get('userActiveMachine') or cur.get('sourceMachine') or '?')
+                until_v = _to_int(cur.get('userActiveUntil', 0))
+                logger.info("POST /layout  %s @ %s  -> REJECTED (protected: %s user-active until %s)",
+                            src, peer_name(self.client_address[0]), cur_m, until_v)
+                self._json(200, {'accepted': False, 'reason': 'protected', 'by': cur_m, 'userActiveUntil': until_v})
+                return
+            if inc_active:
+                data['userActiveMachine'] = src
+            else:
+                data['userActiveUntil'] = 0
+                data['userActiveMachine'] = ''
+            if at <= cur_at:
+                logger.info("POST /layout  %s @ %s  syncAt=%d items=%d  -> REJECTED (hub has %d from %s)",
+                            src, peer_name(self.client_address[0]), at, cnt, cur_at, cur.get('sourceMachine') if cur else '-')
+                self._json(200, {'accepted': False, 'reason': 'older', 'latestSyncAt': cur_at})
+                return
+            try:
+                save_latest(data)
+            except Exception as e:
+                logger.error("POST /layout  %s @ %s  save FAILED: %s", src, peer_name(self.client_address[0]), e)
+                self._json(500, {'error': 'save failed'})
+                return
+            logger.info("POST /layout  %s @ %s  syncAt=%d items=%d  -> ACCEPTED (fp=%s)",
+                        src, peer_name(self.client_address[0]), at, cnt, str(data.get('layoutFingerprint', ''))[:8])
+            self._json(200, {'accepted': True, 'syncAt': at})
 
     def log_message(self, *args):
         pass
