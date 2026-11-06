@@ -384,18 +384,37 @@ func autoSwitchIfNeeded() {
 let minMinutesBetweenAutoSnapshots: TimeInterval = 10 * 60
 var lastAutoSnapshotAt: TimeInterval = 0
 
+
+/// 真正的「布局内容」指纹：图标名 + 坐标 + 屏幕 的稳定摘要。
+/// ⚠️ 别用 currentFingerprint() —— 那个返回的是屏幕尺寸，布局变了它不变。
+func layoutContentFingerprint() -> String {
+    guard let conf = loadConf(), let attrs = conf["itemAttrs"] as? [[String: Any]] else { return "" }
+    let parts = attrs.compactMap { a -> String? in
+        guard let n = a["name"] as? String else { return nil }
+        let x = (a["x"] as? NSNumber)?.intValue ?? 0
+        let y = (a["y"] as? NSNumber)?.intValue ?? 0
+        let sc = (a["screen"] as? NSNumber)?.intValue ?? 1
+        return "\(n)|\(x)|\(y)|\(sc)"
+    }.sorted()
+    return String(parts.joined(separator: ";").hashValue, radix: 16)
+}
+
 /// 自动快照：本机布局指纹变化且距上次 ≥10 分钟才存一份。
 /// 只清本机前缀的旧自动快照，保留 maxAutoSnapshots 份。
 func autoSnapshotIfNeeded() {
     let now = Date().timeIntervalSince1970
     guard now - lastAutoSnapshotAt >= minMinutesBetweenAutoSnapshots else { return }
-    let fp = currentFingerprint()
+    let fp = layoutContentFingerprint()   // 真·布局内容指纹（不是屏幕尺寸）
     guard !fp.isEmpty else { return }
 
     let fm = FileManager.default
     let files = ((try? fm.contentsOfDirectory(atPath: layoutDir)) ?? [])
         .filter { $0.hasPrefix(machinePrefix + autoPrefix) && $0.hasSuffix(".json") }
-        .sorted(by: >)
+        .sorted { a, b in
+            let ma = (try? fm.attributesOfItem(atPath: layoutDir + "/" + a)[.modificationDate] as? Date) ?? nil
+            let mb = (try? fm.attributesOfItem(atPath: layoutDir + "/" + b)[.modificationDate] as? Date) ?? nil
+            return (ma ?? .distantPast) > (mb ?? .distantPast)
+        }
 
     // 保底：距本机最新一份自动快照超过 24 小时，即使布局没变也存一份
     // （防「本地一直没动 → 没有历史 → 万一被远端/误操作改坏就无从回滚」）
@@ -408,10 +427,24 @@ func autoSnapshotIfNeeded() {
     let needDaily = newestAge >= 24 * 3600
 
     // 指纹相同且不满足保底 → 跳过
-    if !needDaily, let newest = files.first,
+    var sameContent = false
+    if let newest = files.first,
        let d = fm.contents(atPath: layoutDir + "/" + newest),
        let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-       (o["fingerprint"] as? String) == fp {
+       let oldItems = o["itemAttrs"] as? [[String: Any]] {
+        // 用快照的 itemAttrs 重新算内容指纹（快照里的 fingerprint 字段是屏幕尺寸，不可用）
+        let parts = oldItems.compactMap { a -> String? in
+            guard let n = a["name"] as? String else { return nil }
+            let x = (a["x"] as? NSNumber)?.intValue ?? 0
+            let y = (a["y"] as? NSNumber)?.intValue ?? 0
+            let sc = (a["screen"] as? NSNumber)?.intValue ?? 1
+            return "\(n)|\(x)|\(y)|\(sc)"
+        }.sorted()
+        sameContent = String(parts.joined(separator: ";").hashValue, radix: 16) == fp
+    }
+    logLine("snapshot: 检查 fp=\(fp) files=\(files.count) newestAge=\(Int(newestAge/3600))h same=\(sameContent) needDaily=\(needDaily)")
+
+    if sameContent && !needDaily {
         lastAutoSnapshotAt = now      // 内容没变也算"刚检查过"，避免每分钟重算
         return
     }
