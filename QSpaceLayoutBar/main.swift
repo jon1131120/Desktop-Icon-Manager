@@ -1082,6 +1082,8 @@ func fixOverlapsIfNeeded() -> Bool {
     let now = Int(Date().timeIntervalSince1970)
     if rt.applyingRemote { return false }                       // 正在应用远端
     let st = loadSyncState()
+    // 吸收期（应用远端 + QSpace 重启重排期间）：把当前指纹持续记为"已知"，绝不上报。
+    // 否则 QSpace 排完盘产生的指纹变化会被当成用户拖动 → 覆盖中枢 → 其他机器再应用 → 死循环
     let supUntil = max(rt.suppressUntil, st["suppressBroadcastUntil"] as? Int ?? 0)
     if now < supUntil { return false }                          // 吸收期内不碰
     if now - lastOverlapFixAt < 60 { return false }             // 冷却 60 秒
@@ -1282,8 +1284,6 @@ func broadcastIfNeeded() {
     guard !fp.isEmpty else { return }
     let now = Int(Date().timeIntervalSince1970)
     var st = loadSyncState()
-    // ⭐ 吸收期（应用远端 + QSpace 重启重排期间）：把当前指纹持续记为"已知"，绝不上报。
-    //    否则 QSpace 排完盘产生的指纹变化会被当成用户拖动 → 覆盖中枢 → 其他机器再应用 → 死循环
     // ⓪ 采样必须**永远**执行（含吸收期）：
     //   吸收期若跳过采样，吸收期结束后的第一次对比会把「应用远端造成的全部位移」
     //   当成新增量；一旦超过 120s 回声豁免窗口，就会被误判成用户拖动 → 误进保护窗
@@ -1303,6 +1303,9 @@ func broadcastIfNeeded() {
         let specEcho = now - specChangedAt < 120
         if movedExisting > 0 && !remoteEcho && !specEcho {
             rt.lastLocalChangeAt = now
+            // ⭐ 用户操作优先于任何退避：用户此刻正在拖动，就要立刻能上报，
+            //    不能被"上一轮被保护窗拒"的退避挡住（否则用户拖了没反应）。
+            rt.protectBackoffUntil = 0
             logLine("sync: 检测到用户拖动（\(movedExisting) 个图标位移）→ 本机进入 10 分钟操作保护窗")
         }
         rt.lastSeenFp = fp
@@ -1328,7 +1331,9 @@ func broadcastIfNeeded() {
 
     // ② 切套冷静期：屏幕刚变（开合盖/插拔外接），本机 fp 变化不是用户改布局 —— 绝不上报，
     //    否则会把"按新套反推的歪坐标"当成真源覆盖中枢（实测导致开合盖后不生效）
-    if now - specChangedAt < 20 { return }
+    //    ⚠️ 必须与采样侧的 specEcho 窗口一致（都是 120s）：否则 20~120s 之间的重排余波
+    //    会被上报（采样已豁免 active 标记，上报侧却放行）→ 切套余波污染中枢。
+    if now - specChangedAt < 120 { return }
 
     // ③ 拖动防抖：停手不足 10 秒先不上报
     if now - rt.lastLocalChangeAt < 10 { return }
@@ -1759,8 +1764,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 布局自动同步：每 3 秒一轮（广播本机 + 拉取其他机器）
         rt.syncState = loadSyncState()
         // 启动基线：把当前指纹直接记为"已见"，避免首轮把自身当成"用户刚改动"
+        // ⚠️ 必须同时初始化 lastSeenItems（图标名→坐标快照）！
+        //    只初始化 lastSeenFp 的话：首次拖动时 lastSeenItems[n] 全是 nil →
+        //    movedExisting 恒为 0 → 永远不标记「用户操作」→ 保护窗在每次
+        //    进程重启后的第一次拖动完全失效（2026-11-07 白纸复查发现）。
         if let c0 = loadConf(), let s0 = makeGridSnapshot(conf: c0) {
             rt.lastSeenFp = s0["layoutFingerprint"] as? String ?? ""
+            let pairs = (s0["items"] as? [[String: Any]] ?? []).compactMap { g -> (String, Int, Int)? in
+                guard let n = g["name"] as? String, let c = g["col"] as? Int, let r = g["row"] as? Int else { return nil }
+                return (n, c, r)
+            }
+            rt.lastSeenItems = Dictionary(pairs.map { ($0.0, ($0.1, $0.2)) }, uniquingKeysWith: { a, _ in a })
+            logLine("startup: 基线已记 fp=\(rt.lastSeenFp) 图标=\(rt.lastSeenItems.count)")
         }
         rt.lastLocalChangeAt = 0
         let syncT = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in runSyncCycle() }

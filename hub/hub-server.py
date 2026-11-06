@@ -18,6 +18,9 @@ MAX_ARCHIVE = 20
 MAX_BODY = 1_000_000          # 请求体上限 1MB，防超大 JSON 打爆内存
 MAX_ITEMS = 500
 
+# 允许的上报方（保险丝）：防止测试/误连客户端污染中枢
+ALLOWED_SOURCES = {'MBP', 'Air', 'Studio'}
+
 # 状态锁：ThreadingHTTPServer 多线程，「load→保护窗判断→syncAt 比较→save」必须原子，
 # 否则旧 syncAt 后写会覆盖新 syncAt（实测 02:06:06/08 两台仅差 2 秒，竞态真实可触发）
 _state_lock = threading.Lock()
@@ -256,6 +259,14 @@ class H(BaseHTTPRequestHandler):
                            src, len(bad), bad[0])
             self._json(400, {'error': f'{len(bad)} malformed items (need name:str, col:int 1-{MAX_COORD}, row:int 1-{MAX_COORD})'})
             return
+        # ---- 保险丝：只接受已知机器 ----
+        # sourceMachine 必须是本机队三台之一。防止测试脚本/误连的客户端把
+        # 垃圾数据写进中枢（2026-11-07 故障注入测试曾污染生产中枢，
+        # archive 里 20 份真实存档被垃圾挤掉，只能靠客户端快照重建）。
+        if src not in ALLOWED_SOURCES:
+            logger.warning("POST /layout from %s rejected: unknown sourceMachine", src)
+            self._json(400, {'error': f'unknown sourceMachine (allowed: {sorted(ALLOWED_SOURCES)})'})
+            return
         cnt = len(items)
         with _state_lock:
             cur = load_latest()
@@ -270,6 +281,15 @@ class H(BaseHTTPRequestHandler):
                     return int(v)
                 except (TypeError, ValueError):
                     return default
+            # ⚠️ 顺序很重要：先比 syncAt（版本新旧=硬逻辑），再查保护窗（权限逻辑）。
+            #    反过来的话：更旧的版本（at <= cur_at）会先撞保护窗 → 返回 protected，
+            #    客户端以为"对方在操作"→ 退避重报 → 直到对方保护窗过期都在白试 → 重试风暴。
+            #    正确：旧版本直接判 older 丢弃，不惊动客户端。
+            if at <= cur_at:
+                logger.info("POST /layout  %s @ %s  syncAt=%d items=%d  -> REJECTED (hub has %d from %s)",
+                            src, peer_name(self.client_address[0]), at, cnt, cur_at, cur.get('sourceMachine') if cur else '-')
+                self._json(200, {'accepted': False, 'reason': 'older', 'latestSyncAt': cur_at})
+                return
             inc_active = _to_int(data.get('userActiveUntil', 0)) > now
             cur_active = (_to_int(cur.get('userActiveUntil', 0)) > now) if cur else False
             if cur and not inc_active and cur_active:
@@ -284,11 +304,6 @@ class H(BaseHTTPRequestHandler):
             else:
                 data['userActiveUntil'] = 0
                 data['userActiveMachine'] = ''
-            if at <= cur_at:
-                logger.info("POST /layout  %s @ %s  syncAt=%d items=%d  -> REJECTED (hub has %d from %s)",
-                            src, peer_name(self.client_address[0]), at, cnt, cur_at, cur.get('sourceMachine') if cur else '-')
-                self._json(200, {'accepted': False, 'reason': 'older', 'latestSyncAt': cur_at})
-                return
             try:
                 save_latest(data)
             except Exception as e:
