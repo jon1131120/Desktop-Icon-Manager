@@ -13,15 +13,26 @@ let maxAutoSnapshots = 10
 // 注意：不能用 Host.current().name——它会做阻塞式 DNS 解析，间歇性卡死主线程（实测采样 781/781 卡在 NSHost blockingResolve）。
 // 改用 sysctl 读内核 hostname，纯内存零网络 IO。
 let machineTag: String = {
+    // ① 优先读部署时写入的显式标识 —— hostname 改名（JondeMacBook-Pro / 用户自定义）
+    //    会让字符串匹配失效，实测 MBP 因此变成 "[jondemacbook-pro] " 前缀，
+    //    与历史快照的 "[MBP] " 对不上 → 快照全部"看不见"。
+    let tagPath = NSString(string: "~/qspace-layouts/machine-tag.txt").expandingTildeInPath
+    if let s = try? String(contentsOfFile: tagPath, encoding: .utf8) {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !t.isEmpty { return t }
+    }
+    // ② 回退：hostname 模糊匹配（先去连字符/空格，否则 "JondeMacBook-Pro" 匹配不到 "macbookpro"）
     var size = 0
     sysctlbyname("kern.hostname", nil, &size, nil, 0)
+    guard size > 1 else { return "Mac" }          // 空缓冲会让 String(cString:) 读到脏内存
     var buf = [CChar](repeating: 0, count: size)
     sysctlbyname("kern.hostname", &buf, &size, nil, 0)
-    let host = String(cString: buf).lowercased()
+    let raw = String(cString: buf).lowercased()
+    let host = raw.replacingOccurrences(of: "-", with: "").replacingOccurrences(of: " ", with: "")
     if host.contains("macbookpro") || host.contains("mbp") { return "MBP" }
     if host.contains("macbookair") { return "Air" }
     if host.contains("macstudio") { return "Studio" }
-    return host.split(separator: ".").first.map(String.init) ?? "Mac"
+    return raw.split(separator: ".").first.map(String.init) ?? "Mac"
 }()
 let machinePrefix = "[\(machineTag)] "
 // 主线程只读缓存，后台线程刷新——iCloud 目录枚举会阻塞主线程数分钟（实测 1519 采样点全卡在 contentsOfDirectory），绝不在主线程同步枚举
@@ -411,6 +422,7 @@ func autoSnapshotIfNeeded() {
     let now = Date().timeIntervalSince1970
     guard now - lastAutoSnapshotAt >= minMinutesBetweenAutoSnapshots else { return }
     let fp = layoutContentFingerprint()   // 真·布局内容指纹（不是屏幕尺寸）
+    logLine("snapshot: A fp=\(fp)")
     guard !fp.isEmpty else { return }
 
     let fm = FileManager.default
@@ -431,6 +443,12 @@ func autoSnapshotIfNeeded() {
         newestAge = now - mt.timeIntervalSince1970
     }
     let needDaily = newestAge >= 24 * 3600
+    // ⚠️ newestAge 在 files 为空时是 .greatestFiniteMagnitude，
+    //    Int(greatestFiniteMagnitude/3600) 会整数溢出 → SIGTRAP 崩溃！
+    //    （曾导致 MBP 每 10 秒崩一次，且崩在 logLine 之前，日志完全无线索）
+    let ageHoursText = newestAge.isFinite && newestAge < 1e12
+        ? "\(Int(newestAge/3600))" : "∞"
+    logLine("snapshot: B files=\(files.count) newestAge=\(ageHoursText)h needDaily=\(needDaily)")
 
     // 指纹相同且不满足保底 → 跳过
     var sameContent = false
@@ -448,7 +466,7 @@ func autoSnapshotIfNeeded() {
         }.sorted()
         sameContent = fnv1a(parts.joined(separator: ";")) == fp   // 同样必须用稳定哈希
     }
-    logLine("snapshot: 检查 fp=\(fp) files=\(files.count) newestAge=\(Int(newestAge/3600))h same=\(sameContent) needDaily=\(needDaily)")
+    logLine("snapshot: 检查 fp=\(fp) files=\(files.count) newestAge=\(ageHoursText)h same=\(sameContent) needDaily=\(needDaily)")
 
     if sameContent && !needDaily {
         lastAutoSnapshotAt = now      // 内容没变也算"刚检查过"，避免每分钟重算
@@ -661,7 +679,7 @@ func mapCell(from s: GridSpec, to d: GridSpec, col: Int, row: Int) -> (Int, Int)
     } else {
         let x0 = 6.0, x1 = Double(Ws - 5), y0 = 6.0, y1 = Double(Wd - 5)
         let t = (Double(o) - x0) / max(1.0, x1 - x0)
-        dc = Ld + Int((y0 + t * (y1 - y0)).rounded())
+        dc = Ld + safeInt(y0 + t * (y1 - y0))
     }
     dc = max(1, min(d.cols, dc))
     return (dc, dr)   // 纯映射；禁区/占用推移在 apply 阶段处理
@@ -738,6 +756,14 @@ func runMappingSelfTest() -> Bool {
 //   x0/y0 = 目标屏图标的最小坐标（三台桌面图标集合相同 → 最左图标 = 列1，语义一致）
 //   step  = 从实际坐标反推（相邻差的最小值众数），差 >15% 才用实测值
 //   保存：col = round((x-x0)/step)+1；应用：x = x0 + (col-1)*step
+
+/// 安全的 Double→Int：NaN / ±∞ / 超出 Int 范围时返回兜底值。
+/// ⚠️ 直接 Int(double) 遇到这些值会 **整数溢出 → SIGTRAP 崩溃**，
+///    而崩溃点常在生产代码的日志插值里，日志完全留不下线索。
+func safeInt(_ d: Double, fallback: Int = 0) -> Int {
+    guard d.isFinite, d >= -9.0e15, d <= 9.0e15 else { return fallback }
+    return Int(d.rounded())
+}
 
 func fnv1a(_ s: String) -> String {
     var h: UInt64 = 0xcbf2_9ce4_8422_2325
@@ -837,8 +863,8 @@ func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
               let name = it["name"] as? String,
               let x = (it["x"] as? NSNumber)?.doubleValue,
               let y = (it["y"] as? NSNumber)?.doubleValue else { continue }
-        let col = Int(((x - spec.x0) / spec.colStep).rounded()) + 1
-        let row = Int(((y - spec.y0) / spec.rowStep).rounded()) + 1
+        let col = safeInt((x - spec.x0) / spec.colStep, fallback: -1) + 1
+        let row = safeInt((y - spec.y0) / spec.rowStep, fallback: -1) + 1
         // 脱敏：优先只存文件名（不泄露用户目录结构）；只有重名时才退化为相对路径
         let base = (name as NSString).lastPathComponent
         let key: String = (nameCounts[base] ?? 0) > 1
@@ -910,12 +936,12 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
         if singleScreen { ni["screen"] = localScreenMode }
         let ox = (it["x"] as? NSNumber)?.intValue ?? -1
         let oy = (it["y"] as? NSNumber)?.intValue ?? -1
-        let oc = ox >= 0 ? Int(((Double(ox) - dst.x0) / dst.colStep).rounded()) + 1 : -1
-        let orow = oy >= 0 ? Int(((Double(oy) - dst.y0) / dst.rowStep).rounded()) + 1 : -1
+        let oc = ox >= 0 ? safeInt((Double(ox) - dst.x0) / dst.colStep) + 1 : -1
+        let orow = oy >= 0 ? safeInt((Double(oy) - dst.y0) / dst.rowStep) + 1 : -1
         var (dc, dr) = mapCell(from: src, to: dst, col: c, row: r)
         // 标准格位的目标像素（无论是否"原位"都以它为准）
-        let stdX = Int((dst.x0 + Double(dc - 1) * dst.colStep).rounded())
-        let stdY = Int((dst.y0 + Double(dr - 1) * dst.rowStep).rounded())
+        let stdX = safeInt(dst.x0 + Double(dc - 1) * dst.colStep)
+        let stdY = safeInt(dst.y0 + Double(dr - 1) * dst.rowStep)
         // 原位保留的严格条件：格号一致 **且** 像素偏差 ≤3px **且** 不越界。
         // 只看格号会把 B 套遗留的 90px 间距、历史偏移的脏坐标（如 2505 vs 标准 2493）固化，
         // 造成"同列两种 x / 行内间距小于图标宽"的可见重叠。
@@ -948,13 +974,13 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
             if dr <= dst.rows {
                 used.insert("\(dc),\(dr)")
                 var fx = dc
-                var nx = Int((dst.x0 + Double(fx - 1) * dst.colStep).rounded())
-                let ny = Int((dst.y0 + Double(dr - 1) * dst.rowStep).rounded())
+                var nx = safeInt(dst.x0 + Double(fx - 1) * dst.colStep)
+                let ny = safeInt(dst.y0 + Double(dr - 1) * dst.rowStep)
                 // 最右列完整放下：越界则左移（配合列数收敛到安全值，双保险）
                 var guardCount = 0
                 while nx > ctx.screen.width - half && fx > 1 && guardCount < 5 {
                     fx -= 1; guardCount += 1
-                    nx = Int((dst.x0 + Double(fx - 1) * dst.colStep).rounded())
+                    nx = safeInt(dst.x0 + Double(fx - 1) * dst.colStep)
                 }
                 ni["x"] = nx; ni["y"] = ny
                 if oc != dc || orow != dr {
@@ -995,8 +1021,8 @@ func fixLocalOverlaps(conf: [String: Any]) -> (patched: Int, newConf: [String: A
               let name = it["name"] as? String,
               let x = (it["x"] as? NSNumber)?.intValue,
               let y = (it["y"] as? NSNumber)?.intValue else { continue }
-        let col = max(1, min(spec.cols, Int(((Double(x) - spec.x0) / spec.colStep).rounded()) + 1))
-        let row = max(1, min(spec.rows, Int(((Double(y) - spec.y0) / spec.rowStep).rounded()) + 1))
+        let col = max(1, min(spec.cols, safeInt((Double(x) - spec.x0) / spec.colStep, fallback: -1) + 1))
+        let row = max(1, min(spec.rows, safeInt((Double(y) - spec.y0) / spec.rowStep, fallback: -1) + 1))
         entries.append((idx, (name as NSString).lastPathComponent, col, row))
     }
     guard entries.count > 1 else { return nil }
@@ -1028,12 +1054,12 @@ func fixLocalOverlaps(conf: [String: Any]) -> (patched: Int, newConf: [String: A
         if c == e.col && r == e.row { continue }
         // 写新坐标；最右列越界则左移（双保险）
         var fx = c
-        var nx = Int((spec.x0 + Double(fx - 1) * spec.colStep).rounded())
-        let ny = Int((spec.y0 + Double(r - 1) * spec.rowStep).rounded())
+        var nx = safeInt(spec.x0 + Double(fx - 1) * spec.colStep)
+        let ny = safeInt(spec.y0 + Double(r - 1) * spec.rowStep)
         var g2 = 0
         while nx > ctx.screen.width - half && fx > 1 && g2 < 5 {
             fx -= 1
-            nx = Int((spec.x0 + Double(fx - 1) * spec.colStep).rounded())
+            nx = safeInt(spec.x0 + Double(fx - 1) * spec.colStep)
             g2 += 1
         }
         out[e.idx]["x"] = nx
