@@ -152,17 +152,14 @@ func qspaceRunning() -> Bool {
 func atomicWriteConfAndRestartQSpace(_ conf: [String: Any]) {
     let config = NSWorkspace.OpenConfiguration()
     if let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.jinghaoshe.qspace.pro").first {
-        app.terminate()
+        // ⭐ 直接强杀（SIGKILL），不走优雅退出：2026-11-11 Studio 实录——QSpace 收到
+        //   terminate 后异步保存内存排列，写盘晚于我们的 conf 覆盖 → 好配置被坏排列
+        //   覆盖（间歇性恢复失败）。强杀无保存机会，conf 由我们全权写入。
+        //   代价：QSpace 下次启动从 conf 全量重建（正是我们要的）。
+        app.forceTerminate()
         for _ in 0..<12 {
             usleep(150_000)
             if app.isTerminated { break }
-        }
-        if !app.isTerminated {
-            app.forceTerminate()
-            for _ in 0..<12 {
-                usleep(150_000)
-                if app.isTerminated { break }
-            }
         }
     }
     writeConf(conf)
@@ -1409,7 +1406,17 @@ func broadcastIfNeeded() {
             return                                     // 名单一致：真没事
         }
         if !hub.isEmpty && mine.isSuperset(of: hub) {
-            ledgerDue = true                           // 我 ⊋ 中枢：补报新增位置（豁免 lastBC）
+            // ⭐ 只补「中枢历史上从没有过」的项（真新增）。多出的项若曾在中枢名单里，
+            //   说明是别的机器删除后 iCloud 未同步到本机（死条目复活）——补报会和
+            //   对端的 30 分钟清理互相打架，形成 30 分钟一轮的中枢名单震荡。
+            let prev = rt.hubNamesSetPrev
+            let extra = mine.subtracting(hub)
+            let revived = extra.filter { prev.contains($0) }
+            if !prev.isEmpty && !revived.isEmpty {
+                logLine("sync: 名单对账：\(revived.count) 项曾在中枢后被删除（iCloud 未同步到本机）→ 不补报，尊重删除")
+                return
+            }
+            ledgerDue = true                           // 真新增：补报（豁免 lastBC）
             rt.ledgerShortSince = 0
         } else if !hub.isEmpty {
             // 我 ⊂ 中枢：两种可能——iCloud 未到货（等）/ 文件已被删除（中枢死条目）。
@@ -1779,6 +1786,7 @@ final class SyncRuntime: @unchecked Sendable {
     private var _protectBackoffUntil = 0   // 保护窗被拒后的重报退避（本机时间轴）
     private var _lastLocalFpLogged = ""     // 退避日志去重（只在 fp 变化时记一次）
     private var _hubNamesSet: Set<String> = []  // 最近一次见到的中枢图标名单（名单对账用）
+    private var _hubNamesSetPrev: Set<String> = []  // 上一次的中枢名单（区分「真新增」与「死条目复活」）
     private var _ledgerShortSince: Int = 0   // 首次发现「本机名单 ⊂ 中枢名单」的时刻（删除对账计时）
     var lastRemoteApplyAt: Int {
         get { lock.lock(); defer { lock.unlock() }; return _lastRemoteApplyAt }
@@ -1798,7 +1806,15 @@ final class SyncRuntime: @unchecked Sendable {
     }
     var hubNamesSet: Set<String> {
         get { lock.lock(); defer { lock.unlock() }; return _hubNamesSet }
-        set { lock.lock(); _hubNamesSet = newValue; lock.unlock() }
+        set {
+            lock.lock()
+            if _hubNamesSet != newValue { _hubNamesSetPrev = _hubNamesSet }
+            _hubNamesSet = newValue
+            lock.unlock()
+        }
+    }
+    var hubNamesSetPrev: Set<String> {
+        get { lock.lock(); defer { lock.unlock() }; return _hubNamesSetPrev }
     }
     var lastLocalFpLogged: String {
         get { lock.lock(); defer { lock.unlock() }; return _lastLocalFpLogged }
