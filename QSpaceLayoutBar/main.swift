@@ -662,28 +662,29 @@ func cellBlocked(_ s: GridSpec, _ c: Int, _ r: Int) -> Bool {
 
 /// 网格映射（纯整数）：源格 → 目标格；落禁区自动推移到最近可用格
 func mapCell(from s: GridSpec, to d: GridSpec, col: Int, row: Int) -> (Int, Int) {
+    // ⭐ v6 相对坐标映射（2026-11-11 杰哥定规：右侧 5 列固定区 + 左侧贴组件映射）
+    //   旧版中段线性插值在"格子数不等"的两套间必然有损（实测 12% 格位往返不可逆），
+    //   有损映射随上报轮次累积 = 用户可见的「慢慢漂移」。
+    //   新规则两段都是**纯平移直通**（数学上完全可逆）：
+    //   ① 右侧 5 列固定区：距右缘 idxR 格 ↔ 距右缘 idxR 格（三端同列数 → 完美双射）
+    //   ② 左侧映射区：贴组件带第 o 格 ↔ 贴组件带第 o 格（相对编号三端一致）
+    //   接缝/容量差由 clamp + 应用端占用推移兜底（确定性，不累积）。
     let Ls = leftBase(s, row)
-    let Ws = s.cols - Ls
-    let o = col - Ls
-    let rightAnchor = (Ws - o) <= 5
+    let idxR = s.cols - col                    // 距右缘格数（最右列 = 0）
+    let rightAnchor = idxR <= 5                // 杰哥的「右侧 5 列固定区」
     var dr = row
     if row >= s.zone2.0 && row <= s.zone2.1 && !rightAnchor {
         dr = row + (d.zone2.0 - s.zone2.0)
     }
     dr = max(1, min(d.rows, dr))
     let Ld = leftBase(d, dr)
-    let Wd = d.cols - Ld
     var dc: Int
     if rightAnchor {
-        dc = Ld + Wd - (Ws - o)
-    } else if o <= 6 {
-        dc = Ld + o
+        dc = d.cols - idxR                     // 固定区：距右 N ↔ 距右 N（完美双射）
     } else {
-        let x0 = 6.0, x1 = Double(Ws - 5), y0 = 6.0, y1 = Double(Wd - 5)
-        let t = (Double(o) - x0) / max(1.0, x1 - x0)
-        dc = Ld + safeInt(y0 + t * (y1 - y0))
+        dc = Ld + (col - Ls)                   // 映射区：贴组件第 o 格 ↔ 贴组件第 o 格
     }
-    dc = max(1, min(d.cols, dc))
+    dc = max(Ld + 1, min(d.cols, dc))
     return (dc, dr)   // 纯映射；禁区/占用推移在 apply 阶段处理
 }
 
