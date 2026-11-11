@@ -1,0 +1,59 @@
+{
+ "results": [
+  {
+   "name": "精简 conf → 自愈补回 lod/hSp/font",
+   "ok": true,
+   "detail": "{'lod': 64, 'hSp': 22, 'font': 11}"
+  },
+  {
+   "name": "自愈告警只打一次",
+   "ok": true,
+   "detail": "1"
+  },
+  {
+   "name": "自愈后上报成功且带桌面参数(lod=64)",
+   "ok": true,
+   "detail": "{'items': 12, 'settings_lod': 64, 'out': ['HARNESS step[1] op=pull', 'HARNESS step[2] op=bc', 'HARNESS bc done']}"
+  },
+  {
+   "name": "磁盘 conf 仍缺 lod（loadConf 只修内存副本，写盘才落）——记录行为",
+   "ok": true,
+   "detail": "{'disk_lod': 'MISSING'}"
+  },
+  {
+   "name": "坏 JSON → loadConf 拒绝 + 日志告警 + 不崩",
+   "ok": true,
+   "detail": "{'rc': 0, 'log': ['2026-11-12 01:23:09: ⚠️ loadConf: desktop.conf 解析失败（文件可能损坏，同步已暂停）', '2026-11-12 01:23:09: sync: 广播跳过（desktop.conf 读不到或损坏），本轮不发']}"
+  },
+  {
+   "name": "坏 JSON 期间不上报（同步暂停）",
+   "ok": true,
+   "detail": "{'note': 'bc 直接 return，无 POST（rc=0 无崩溃）'}"
+  },
+  {
+   "name": "conf 不存在 → 明确日志 + 不崩",
+   "ok": true,
+   "detail": "{'rc': 0, 'log': ['2026-11-12 01:23:09: sync: 广播跳过（desktop.conf 读不到或损坏），本轮不发']}"
+  },
+  {
+   "name": "失真 screen=2（主屏坐标）→ 归并后快照 37 项全收",
+   "ok": true,
+   "detail": "{'snap_items': 37, 'log': ['2026-11-12 01:23:09: screen: 屏号自愈：screen=2 的 3 项坐标落在主屏范围内 → 归入 screen=1']}"
+  },
+  {
+   "name": "真双屏（副屏 C 坐标）→ 不误并，快照只收主屏 20 项",
+   "ok": true,
+   "detail": "{'snap_items': 20, 'log': ['2026-11-12 01:23:10: screen: 屏号自愈跳过 screen=2（对主屏网格对齐率 0% < 80%，判定为真双屏）']}"
+  },
+  {
+   "name": "两写者 40×2 并发 → 终态是完整 JSON（无半截）",
+   "ok": true,
+   "detail": "{'items': 15, 'err': None}"
+  },
+  {
+   "name": "无残留 .tmp",
+   "ok": true,
+   "detail": "[]"
+  }
+ ]
+}

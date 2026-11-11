@@ -1,0 +1,27 @@
+[
+ {
+  "name": "24.1 单实例判据在 app.run() 之前、自检模式之后（--selftest 不被拦）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "24.2 单实例用 bundleIdentifier 判（launchd 启动 .app 内二进制可识别）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "24.3 LaunchAgent 指向 .app 内二进制（bundle 判据可解析）",
+  "ok": true,
+  "detail": "{\n  \"KeepAlive\" => true\n  \"Label\" => \"com.jon1131120.qspacelayoutbar\"\n  \"ProgramArguments\" => [\n    0 => \"/Applications/QSpaceLayoutBar.app/Contents/MacOS/QSpaceLayoutBar\"\n  ]\n  \"RunAtLoad\" => true\n  "
+ },
+ {
+  "name": "24.4 KeepAlive + ThrottleInterval 10（崩溃不刷屏重启）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "24.5 两个进程同时自检都 PASS（无共享状态踩踏）",
+  "ok": true,
+  "detail": "('SELFTEST PASS', 'SELFTEST PASS')"
+ }
+]

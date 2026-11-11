@@ -1,0 +1,52 @@
+[
+ {
+  "name": "12.1 错 token → 401",
+  "ok": true,
+  "detail": "(401, {'error': 'unauthorized'})"
+ },
+ {
+  "name": "12.2 空 token → 401",
+  "ok": true,
+  "detail": "(401, {'error': 'unauthorized'})"
+ },
+ {
+  "name": "12.3 正确 token → 200 accepted",
+  "ok": true,
+  "detail": "(200, {'accepted': True, 'syncAt': 1794415385})"
+ },
+ {
+  "name": "12.4 body >1MB → 413（实现值；工况书写 400，语义 413 更准确）",
+  "ok": true,
+  "detail": "(413, '{\"error\": \"payload too large\"}')"
+ },
+ {
+  "name": "12.5 items >500 → 400",
+  "ok": true,
+  "detail": "(400, {'error': 'too many items (max 500)'})"
+ },
+ {
+  "name": "12.6 坏 JSON → 400",
+  "ok": true,
+  "detail": "(400, '{\"error\": \"Expecting value: line 1 column 12 (char 11)\"}')"
+ },
+ {
+  "name": "12.7 syncAt 超前 >300s → 400 future",
+  "ok": true,
+  "detail": "(400, {'error': 'syncAt too far in future'})"
+ },
+ {
+  "name": "12.8 旧 syncAt → 200 accepted:false reason=older",
+  "ok": true,
+  "detail": "(200, {'accepted': False, 'reason': 'older', 'latestSyncAt': 1794415385})"
+ },
+ {
+  "name": "12.9 白名单外 sourceMachine → 400",
+  "ok": true,
+  "detail": "(400, {'error': \"unknown sourceMachine (allowed: ['Air', 'MBP', 'Studio'])\"})"
+ },
+ {
+  "name": "12.10 网段外（18891 实例）→ 403",
+  "ok": true,
+  "detail": "403"
+ }
+]

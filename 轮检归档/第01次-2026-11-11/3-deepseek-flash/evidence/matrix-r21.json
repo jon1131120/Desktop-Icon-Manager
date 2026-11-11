@@ -1,0 +1,42 @@
+[
+ {
+  "name": "21.1 test-hub.py 17 项契约全绿（沙箱 18890 + SANDBOX_HOME 清场）",
+  "ok": true,
+  "detail": "['  ✓ 并发后 syncAt 单调（=最大值）', '', '结果: 17 通过, 0 失败']"
+ },
+ {
+  "name": "21.2 test-hub 清场改为删 layout.json（生产无 /reset）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "21.3 ⚠️ reset 兜底分支仍静默吞错（glm P4 声称已修，实际未落实）",
+  "ok": true,
+  "detail": "():\n    \"\"\"每个用例前清空中枢状态，避免用例间互相干扰（保护窗会延续）\n\n    生产 hub 没有 /reset 端点（2026-11-11 轮检 R20/R29 实测：GET/POST 只认\n       /layout 与 /status，未知路径 404）-> 旧实现的 POST /reset 静默失败，\n       17 项契约测试实际跑在脏状态上（保护窗延续到后续用例）。\n       改为直接删除沙箱中枢的 layout.json（真跑清场）。\n    \"\"\"\n    import os, glob\n    home = os.environ.get(\"SANDBOX_HOME\", \"\")\n    if home:\n        for f in glob.glob(os.path.join(home, \"layout.json\")):\n            "
+ },
+ {
+  "name": "21.4 check-layout 硬编码 ~/Library/.../desktop.conf（不能指定文件/沙箱）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "21.5 check-layout 套判定兜底仍硬判 C（glm P6 声称已修，实际未落实）",
+  "ok": true,
+  "detail": "key=('A' if abs(w-1710)<=abs(w-1728) else 'B') if (abs(w-1710)<=40 and abs(w-1728)<=40) else ('A' if abs(w-1710)<=40 else ('B' if abs(w-1728)<=40 else 'C'))"
+ },
+ {
+  "name": "21.6 check-layout 用 round 而生产用截断 → 边界列判定可差 1 格",
+  "ok": true,
+  "detail": "[(177, 2, 1), (200, 2, 1)]"
+ },
+ {
+  "name": "21.7 cmp 的 cols/rows/组件区/行带与生产 GridSpec 逐字段一致",
+  "ok": true,
+  "detail": "({'A': (21, 9, 9, 4, 4, 5, 7), 'B': (19, 9, 8, 4, 4, 5, 7), 'C': (22, 9, 6, 3, 3, 4, 6)}, {'A': (21, 9, 9, 4, 4, 5, 7), 'B': (19, 9, 8, 4, 4, 5, 7), 'C': (22, 9, 6, 3, 3, 4, 6)})"
+ },
+ {
+  "name": "21.8 cmp 硬编码 HUB 192.168.113.11:18878 与三台 ssh（沙箱/离线不可用）",
+  "ok": true,
+  "detail": ""
+ }
+]

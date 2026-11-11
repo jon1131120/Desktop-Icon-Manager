@@ -1,0 +1,22 @@
+--- a/QSpaceLayoutBar/main.swift
++++ b/QSpaceLayoutBar/main.swift
+@@ -757,6 +757,19 @@
+             else { logLine("selftest FAIL \(sk)->\(dk) #\(p.n) \(src) -> \(got) expect \(dst)") }
+         }
+     }
++    // ⭐ 上界 clamp 覆盖（第01次轮检 4-mimo R20 实测）：暴力枚举三套全部 1674 个映射，
++    //   pre-clamp dc > d.cols 的只有 C→B (16,7) 这 1 个（dc=20 > 19），它既不在 42 个
++    //   标定点里、也不在 pairs 的三方向里（pairs 无 C→B）→ 变异 M4（上界放宽）恒绿。
++    //   此处补一条定向断言：生产上该格会被 clamp 到 (19,7)，回归必须守住。
++    let clampCases: [(GridSpec, GridSpec, (Int, Int), (Int, Int))] = [
++        (SPEC_C, SPEC_B, (16, 7), (19, 7)),
++    ]
++    for (fs, ts, csrc, want) in clampCases {
++        let got = mapCell(from: fs, to: ts, col: csrc.0, row: csrc.1)
++        total += 1
++        if got == want { pass += 1 }
++        else { logLine("selftest FAIL clamp \(fs.key)->\(ts.key) \(csrc) -> \(got) expect \(want)") }
++    }
+     logLine("selftest: \(pass)/\(total) 吻合（跳过超界点 \(skipped) 个）")
+     return pass == total && total > 0
+ }

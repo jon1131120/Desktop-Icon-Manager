@@ -1,0 +1,44 @@
+{
+ "results": [
+  {
+   "name": "中段区占满+1临时卷宗 → relocate 8s 内返回（若此条❌=死循环实锤）",
+   "ok": false,
+   "detail": "TimeoutExpired：relocateStrayVolumes 游标无界死循环复现（main.swift:1022-1026）"
+  },
+  {
+   "name": "对照：不带尾空格 → VIP 归位 (19,2)",
+   "ok": true,
+   "detail": "{'pos': (19, 2), 'log': 'HARNESS relocate CHANGED'}"
+  },
+  {
+   "name": "【deepseek-P2】带尾随空格 → 永不归位（❌=缺陷仍在）",
+   "ok": true,
+   "detail": "{'pos': (5, 8), 'log': 'HARNESS relocate nil'}"
+  },
+  {
+   "name": "钟快 400s：自愈分支不可达（无「本机时钟超前」日志）",
+   "ok": true,
+   "detail": "{'heal_log': []}"
+  },
+  {
+   "name": "【deepseek-P2】二次被拒后放弃本机版本 → baseline 被写成 fp1（改动丢失）",
+   "ok": true,
+   "detail": "{'baseline': 'd5d706e59f6e', 'expect_fp1': 'd5d706e59f6e', 'hub_syncAt': 1794418502, 'log': ['2026-11-12 01:35:11: sync: 上报重推后仍被拒，放弃本机版本，交给拉取']}"
+  },
+  {
+   "name": "kept 排队尾占落点 → 应用后同格重叠 0（两段式预登记有效）",
+   "ok": true,
+   "detail": "{'apply': 'HARNESS applyfile matched=4 kept=1 moved=4', 'dups': {}, 'cells': {'(3, 10)': ['f01.txt'], '(4, 10)': ['f02.txt'], '(6, 10)': ['f03.txt'], '(7, 10)': ['f04.txt'], '(2, 10)': ['kept.md']}}"
+  },
+  {
+   "name": "specForSize 容差+最近中心（1710→A、1720/1728/1760→B、2560→C、容差外兜底）",
+   "ok": true,
+   "detail": "{1710: 'A', 1720: 'B', 1728: 'B', 1760: 'B', 1650: 'B', 2560: 'C'}"
+  },
+  {
+   "name": "【deepseek-P3】中枢清空后 baseline 已对齐的客户端不再补报（❌=仍在）",
+   "ok": true,
+   "detail": "{'before': 12, 'after': 0, 'log': []}"
+  }
+ ]
+}

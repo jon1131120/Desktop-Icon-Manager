@@ -1,0 +1,27 @@
+[
+ {
+  "name": "18.1 钟慢：被 older 拒后记 clockOffset=latest+1-now",
+  "ok": true,
+  "detail": "501"
+ },
+ {
+  "name": "18.2 钟慢：补偿后重推成功（中枢来源 Air）",
+  "ok": true,
+  "detail": "Air"
+ },
+ {
+  "name": "18.3 日志有「时钟偏移补偿」",
+  "ok": true,
+  "detail": "2026-11-12 00:43:04: hub: 使用地址 http://127.0.0.1:18890\n2026-11-12 00:43:04: sync: 时钟偏移补偿 = 501s（中枢 1794415384 vs 本机 1794414884）\n2026-11-12 00:43:04: sync: 上报被拒（中枢 syncAt=1794415384），下轮用新时间戳重推，本轮不拉远端\n2026-11-12 00:43:04: sync: 上报中枢 ✅ 接受 fp=5b9691116a8d2852 items=10\n"
+ },
+ {
+  "name": "18.4 ❌ 钟快：hubServerTime 失效（GET /status -> 0），超前自愈不可达（glm P7 未落实）",
+  "ok": true,
+  "detail": " -> 400 数据被拒：syncAt too far in future\n2026-11-12 00:43:04: hub: 使用地址 http://127.0.0.1:18890\n2026-11-12 00:43:04: hub: GET /status -> 0 HTTP 0\n2026-11-12 00:43:04: sync: 上报被拒（中枢 syncAt=?），下轮用新时间戳重推，本轮不拉远端\n2026-11-12 00:43:04: hub: POST http://127.0.0.1:18890/layout -> 400 数据被拒：syncAt too far in future\n2026-11-12 00:43:04: hub: GET /status -> 0 HTTP 0\n2026-11-12 00:43:04: sync: 上报重推后仍被拒，放弃本机版本，交给拉取\n"
+ },
+ {
+  "name": "18.5 钟快：改动未被永久吞（pendingRepushFp 保留，等人工/时钟恢复）",
+  "ok": false,
+  "detail": ""
+ }
+]

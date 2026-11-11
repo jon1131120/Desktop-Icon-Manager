@@ -1,0 +1,37 @@
+[
+ {
+  "name": "11.1 同分钟 3 次同名保存全部保留（-1/-2 防撞）",
+  "ok": true,
+  "detail": "HARNESS ls [\"[MBP] 手动A-1.json\", \"[MBP] 手动A-2.json\", \"[MBP] 手动A.json\"]"
+ },
+ {
+  "name": "11.2 自动快照首轮生成",
+  "ok": true,
+  "detail": "c410d\n2026-11-12 00:43:04: snapshot: B files=0 newestAge=∞h needDaily=true\n2026-11-12 00:43:04: snapshot: 检查 fp=a466c989073c410d files=0 newestAge=∞h same=false needDaily=true\n2026-11-12 00:43:04: saveLayout: 已写入「[MBP] 自动 [外置屏] 11-12_凌晨1243」(30 图标)\n2026-11-12 00:43:04: snapshot: 自动快照已存（共 1 份本机自动快照）\n"
+ },
+ {
+  "name": "11.3 内容未变不重复存（same=true）",
+  "ok": true,
+  "detail": "置屏] 11-12_凌晨1243」(30 图标)\n2026-11-12 00:43:04: snapshot: 自动快照已存（共 1 份本机自动快照）\n2026-11-12 00:43:04: snapshot: A fp=a466c989073c410d\n2026-11-12 00:43:04: snapshot: B files=1 newestAge=0h needDaily=false\n2026-11-12 00:43:04: snapshot: 检查 fp=a466c989073c410d files=1 newestAge=0h same=true needDaily=false\n"
+ },
+ {
+  "name": "11.4 24h 保底快照（needDaily 生效，份数 +1）",
+  "ok": true,
+  "detail": "(1, 2)"
+ },
+ {
+  "name": "11.5 从快照恢复：位置还原",
+  "ok": true,
+  "detail": "[(911, 40)]"
+ },
+ {
+  "name": "11.6 prune 保留 10 份本机自动快照",
+  "ok": true,
+  "detail": "10"
+ },
+ {
+  "name": "11.7 prune 不误删手动快照",
+  "ok": true,
+  "detail": "/tmp/ds_sandbox/runs/r11/layouts/[MBP] 手动A.json"
+ }
+]

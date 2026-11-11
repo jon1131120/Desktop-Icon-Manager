@@ -1,0 +1,67 @@
+[
+ {
+  "name": "1.1 MBP 快照 37 项（38 桌面项 − VIP SynologyDrive）",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=snap\nHARNESS snap spec=C items=37 fp=26883c35e854461e"
+ },
+ {
+  "name": "1.2 上报被中枢接受（iconCount=37）",
+  "ok": true,
+  "detail": "{'ok': True, 'hasLayout': True, 'syncAt': 1794415382, 'sourceMachine': 'MBP', 'iconCount': 37, 'archiveCount': 12, 'serverTime': 1794415383}"
+ },
+ {
+  "name": "1.3 中枢落盘 spec=C/source=MBP",
+  "ok": true,
+  "detail": "C"
+ },
+ {
+  "name": "1.4 中枢 items 无空名/无越界",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "1.5 Air 应用远端（日志 matched=37）",
+  "ok": true,
+  "detail": "['2026-11-12 00:43:03: sync: 应用 source=MBP 套 C→A matched=37 moved=37 kept=0']"
+ },
+ {
+  "name": "1.6 应用后校验通过",
+  "ok": true,
+  "detail": "['2026-11-12 00:43:03: sync: 校验 ok=true checked=37 bad=0 total=37', '2026-11-12 00:43:03: STUB notify: 已同步「MBP」布局（37 个归位，校验通过 37 个）']"
+ },
+ {
+  "name": "1.7 应用后无同格重叠",
+  "ok": true,
+  "detail": "{}"
+ },
+ {
+  "name": "1.8 位置级映射正确（允许 VIP/kept 推移 ≤2 格）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "1.9 中枢拒收空 items（400）",
+  "ok": true,
+  "detail": "(400, {'error': 'items must be a non-empty array'})"
+ },
+ {
+  "name": "1.10a 空 itemAttrs：客户端不发（中枢 syncAt 不变）",
+  "ok": true,
+  "detail": "(1794415382, 1794415382)"
+ },
+ {
+  "name": "1.10b 空 itemAttrs：快照失败有日志",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=bc\nHARNESS bc done"
+ },
+ {
+  "name": "1.10c 仅 VIP/卷宗：显式空布局拦截日志",
+  "ok": true,
+  "detail": "2026-11-12 00:43:03: sync: 本机布局为空（0 个图标），拒绝上报以免清空中枢\n"
+ },
+ {
+  "name": "1.10d 仅 VIP/卷宗：中枢未被清空",
+  "ok": true,
+  "detail": "(37, 37)"
+ }
+]

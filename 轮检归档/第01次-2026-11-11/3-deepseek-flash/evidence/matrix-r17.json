@@ -1,0 +1,52 @@
+[
+ {
+  "name": "17.x items 为 int → 400（实测 400）",
+  "ok": true,
+  "detail": "(400, \"{'error': 'items must be a non-empty array'}\")"
+ },
+ {
+  "name": "17.x items 含 bool 坐标 → 400（实测 400）",
+  "ok": true,
+  "detail": "(400, \"{'error': '1 malformed items (need name:str, col:int 1-1000, row:int 1-1000)'}\")"
+ },
+ {
+  "name": "17.x col=1001 超上限 → 400（实测 400）",
+  "ok": true,
+  "detail": "(400, \"{'error': '1 malformed items (need name:str, col:int 1-1000, row:int 1-1000)'}\")"
+ },
+ {
+  "name": "17.x col=1000 上限内 → 200（实测 200）",
+  "ok": true,
+  "detail": "(200, \"{'accepted': True, 'syncAt': 1794415388}\")"
+ },
+ {
+  "name": "17.x 缺 sourceMachine → 400（实测 400）",
+  "ok": true,
+  "detail": "(400, '{\\'error\\': \"unknown sourceMachine (allowed: [\\'Air\\', \\'MBP\\', \\'Studio\\'])\"}')"
+ },
+ {
+  "name": "17.x syncAt 缺失 → 400（实测 400）",
+  "ok": true,
+  "detail": "(400, \"{'error': 'missing syncAt'}\")"
+ },
+ {
+  "name": "17.x syncAt 字符串 → 400（实测 500）",
+  "ok": false,
+  "detail": "(500, \"{'error': 'internal error'}\")"
+ },
+ {
+  "name": "17.x item 是字符串 → 400（实测 400）",
+  "ok": true,
+  "detail": "(400, \"{'error': '1 malformed items (need name:str, col:int 1-1000, row:int 1-1000)'}\")"
+ },
+ {
+  "name": "17.x name 空串 → 200（实测 200）",
+  "ok": true,
+  "detail": "(200, \"{'accepted': True, 'syncAt': 1794415391}\")"
+ },
+ {
+  "name": "17.y 重复 name 中枢不拦（接受）",
+  "ok": true,
+  "detail": "(200, {'accepted': True, 'syncAt': 1794415434})"
+ }
+]

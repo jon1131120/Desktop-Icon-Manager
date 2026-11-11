@@ -1,0 +1,25 @@
+--- a/QSpaceLayoutBar/main.swift	2026-11-12 00:44:30
++++ b/QSpaceLayoutBar/main.swift	2026-11-12 00:44:30
+@@ -1018,12 +1018,21 @@
+     guard changed else { return nil }
+     // 弹去中段区第一个空格：从左列到右列、从上到下
+     var cursor = (spec.midZone.0, 1)
++    // ⭐ 有界搜索（第01次轮检 deepseek R20 实测：中段区被占满时旧实现无限循环，
++    //   主线程/同步线程直接卡死）。容量 = 列数 × 行数，走满一圈还没空格就放弃搬移。
++    let midCapacity = (spec.midZone.1 - spec.midZone.0 + 1) * spec.rows
+     for mv in evict {
+-        while occupied.contains("\(cursor.0),\(cursor.1)") {
++        var probes = 0
++        while occupied.contains("\(cursor.0),\(cursor.1)") && probes < midCapacity {
+             cursor.1 += 1
+             if cursor.1 > spec.rows { cursor.1 = 1; cursor.0 += 1 }
+             if cursor.0 > spec.midZone.1 { cursor.0 = spec.midZone.0 }
++            probes += 1
+         }
++        if probes >= midCapacity {
++            logLine("volumes: 中段区已满，\((mv.name as NSString).lastPathComponent) 暂不搬移（避免死循环）")
++            continue
++        }
+         let nx = spec.x0 + Double(cursor.0 - 1) * spec.colStep
+         let ny = spec.y0 + Double(cursor.1 - 1) * spec.rowStep
+         attrs[mv.idx]["x"] = Int(nx)

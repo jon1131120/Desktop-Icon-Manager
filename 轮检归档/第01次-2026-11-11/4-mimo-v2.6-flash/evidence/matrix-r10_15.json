@@ -1,0 +1,55 @@
+{
+ "results": [
+  {
+   "name": "前置：中枢版本 syncAt=T",
+   "ok": true,
+   "detail": "1794418205"
+  },
+  {
+   "name": "被 older 拒后记录时钟偏移",
+   "ok": true,
+   "detail": "['2026-11-12 01:30:05: sync: 时钟偏移补偿 = 501s（中枢 1794418205 vs 本机 1794417705）']"
+  },
+  {
+   "name": "clockOffset≈501s 落盘",
+   "ok": true,
+   "detail": "501"
+  },
+  {
+   "name": "补偿后上报成功（中枢 syncAt > 旧值）",
+   "ok": true,
+   "detail": "{'sync_before': 1794418205, 'sync_after': 1794418206, 'log': ['2026-11-12 01:30:06: sync: 上报中枢 ✅ 接受 fp=c978a5801441bf4a items=15']}"
+  },
+  {
+   "name": "空 itemAttrs → 拒发（快照失败/空守卫），中枢 0 新增",
+   "ok": true,
+   "detail": "{'log': ['2026-11-12 01:30:06: ⚠️ 快照生成失败（localGridContext 无可用屏组），本轮跳过']}"
+  },
+  {
+   "name": "0 桌面文件 → 「拒绝上报以免清空中枢」",
+   "ok": true,
+   "detail": "{'log': ['2026-11-12 01:30:06: sync: 本机布局为空（0 个图标），拒绝上报以免清空中枢'], 'posts_delta': 0}"
+  },
+  {
+   "name": "selftest 126/126 吻合",
+   "ok": true,
+   "detail": "{'stdout': 'SELFTEST PASS', 'detail': '126/126 吻合'}"
+  },
+  {
+   "name": "变异 M1/M2/M3 都能让 selftest 变红（测试有效性）",
+   "ok": true,
+   "detail": "{'M1_右锚减一': 'RED(变红✅)', 'M2_行带不平移': 'RED(变红✅)', 'M3_下界clamp去掉': 'RED(变红✅)', 'M4_上界clamp放宽': 'GREEN(未变红❌)'}"
+  },
+  {
+   "name": "变异 M4（上界 clamp 放宽）实测记录（deepseek 报无覆盖，看是否仍绿）",
+   "ok": true,
+   "detail": "{'M1_右锚减一': 'RED(变红✅)', 'M2_行带不平移': 'RED(变红✅)', 'M3_下界clamp去掉': 'RED(变红✅)', 'M4_上界clamp放宽': 'GREEN(未变红❌)'}"
+  }
+ ],
+ "mutations": {
+  "M1_右锚减一": "RED(变红✅)",
+  "M2_行带不平移": "RED(变红✅)",
+  "M3_下界clamp去掉": "RED(变红✅)",
+  "M4_上界clamp放宽": "GREEN(未变红❌)"
+ }
+}

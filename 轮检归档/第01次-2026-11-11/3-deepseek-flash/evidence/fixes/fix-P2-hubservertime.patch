@@ -1,0 +1,14 @@
+--- a/QSpaceLayoutBar/main.swift	2026-11-12 00:44:30
++++ b/QSpaceLayoutBar/main.swift	2026-11-12 00:44:30
+@@ -1448,7 +1448,10 @@
+ 
+ /// 取中枢服务器时间（用于时钟超前时校准）
+ func hubServerTime() -> Int? {
+-    guard let o = httpGetJSON("/status"), let t = o["serverTime"] as? Int else { return nil }
++    // ⭐ 必须走 hubGet（拼 base + LAN→ZT 回退 + 令牌头）。旧实现 httpGetJSON("/status")
++    //   是相对 URL → URLRequest 直接失败 → 恒返回 nil → 钟超前机器的自愈分支永不可达
++    //   （第01次轮检 deepseek R18 实测：日志 GET /status -> 0，改动被永久吞）。
++    guard let o = hubGet("/status"), let t = o["serverTime"] as? Int else { return nil }
+     return t
+ }
+ 

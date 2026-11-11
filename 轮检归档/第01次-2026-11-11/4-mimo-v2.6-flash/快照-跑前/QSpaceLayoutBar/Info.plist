@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>QSpaceLayoutBar</string>
+    <key>CFBundleDisplayName</key>
+    <string>QSpace 布局</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.jon1131120.qspacelayoutbar</string>
+    <key>CFBundleVersion</key>
+    <string>2.0.6134</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleExecutable</key>
+    <string>QSpaceLayoutBar</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>需要连接局域网或 ZeroTier 上的布局同步中枢，用于三台 Mac 桌面图标布局同步。</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_qspace-hub._tcp</string>
+    </array>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Custom build for personal use</string>
+	<!-- 禁止系统自动终止（菜单栏 app 无窗口时 macOS 会在内存压力下杀掉它） -->
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<key>NSAppSleepDisabled</key>
+	<true/>
+	<key>LSAppNapIsDisabled</key>
+	<true/>
+</dict>
+</plist>

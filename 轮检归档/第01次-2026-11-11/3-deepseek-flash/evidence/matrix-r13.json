@@ -1,0 +1,27 @@
+[
+ {
+  "name": "13.1 最终 syncAt = 最大提交值（无旧盖新）",
+  "ok": true,
+  "detail": "(1794415493, 1794415493)"
+ },
+ {
+  "name": "13.2 并发下每个「更新」的上报都可能被接受，但旧值必被拒（older 数 ≥1，且赢家被接受）",
+  "ok": true,
+  "detail": "[(1794415484, True, None), (1794415485, True, None), (1794415486, True, None), (1794415487, True, None), (1794415490, True, None), (1794415488, False, 'older'), (1794415489, False, 'older'), (1794415491, True, None), (1794415492, True, None), (1794415493, True, None)]"
+ },
+ {
+  "name": "13.3 终态 items 与最大 syncAt 的胜者一致（无交叉写坏）",
+  "ok": true,
+  "detail": "([{'name': 'c9', 'col': 10, 'row': 1}], 1794415493)"
+ },
+ {
+  "name": "13.4 layout.json 完整可解析",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "13.5 归档条数与接受数一致（无重复归档）",
+  "ok": true,
+  "detail": "20"
+ }
+]

@@ -1,0 +1,127 @@
+[
+ {
+  "name": "错token→401",
+  "ok": true,
+  "detail": "(401, '{\"error\": \"unauthorized\"}')"
+ },
+ {
+  "name": "GET错token→401",
+  "ok": true,
+  "detail": "(401, '{\"error\": \"unauthorized\"}')"
+ },
+ {
+  "name": "网段外→403(18891实例)",
+  "ok": true,
+  "detail": "(403, '{\"error\": \"forbidden\"}')"
+ },
+ {
+  "name": "body>1MB→合同口径400（实际见detail）",
+  "ok": false,
+  "detail": "(0, {'err': '<urlopen error [Errno 32] Broken pipe>'})"
+ },
+ {
+  "name": "items>500→400",
+  "ok": true,
+  "detail": "(400, '{\"error\": \"too many items (max 500)\"}')"
+ },
+ {
+  "name": "坏JSON→400",
+  "ok": true,
+  "detail": "(400, '{\"error\": \"Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\"}')"
+ },
+ {
+  "name": "时间超前300s→400",
+  "ok": true,
+  "detail": "(400, '{\"error\": \"syncAt too far in future\"}')"
+ },
+ {
+  "name": "【复核deepseek#1】syncAt类型错误→期望400（当前若500=未修）",
+  "ok": false,
+  "detail": "(500, '{\"error\": \"internal error\"}')"
+ },
+ {
+  "name": "白名单外机器→400",
+  "ok": true,
+  "detail": "(400, '{\"error\": \"unknown sourceMachine (allowed: [\\'Air\\', \\'MBP\\', \\'Studio\\'])\"}')"
+ },
+ {
+  "name": "items=[]→400",
+  "ok": true,
+  "detail": "(400, '{\"error\": \"items must be a non-empty array\"}')"
+ },
+ {
+  "name": "items非数组→400",
+  "ok": true,
+  "detail": "(400, '{\"error\": \"items must be a non-empty array\"}')"
+ },
+ {
+  "name": "col为bool→400",
+  "ok": true,
+  "detail": "(400, '{\"error\": \"1 malformed items (need name:str, col:int 1-1000, row:int 1-1000)\"}')"
+ },
+ {
+  "name": "active上报→接受",
+  "ok": true,
+  "detail": "{'accepted': True, 'syncAt': 1794416584}"
+ },
+ {
+  "name": "非active覆盖active→protected",
+  "ok": true,
+  "detail": "{'accepted': False, 'reason': 'protected', 'by': 'MBP', 'userActiveUntil': 1794416984}"
+ },
+ {
+  "name": "旧syncAt先于保护窗判older",
+  "ok": true,
+  "detail": "{'accepted': False, 'reason': 'older', 'latestSyncAt': 1794416584}"
+ },
+ {
+  "name": "双方active后改者赢",
+  "ok": true,
+  "detail": "{'accepted': True, 'syncAt': 1794416586}"
+ },
+ {
+  "name": "active已过期→非active放行",
+  "ok": true,
+  "detail": "{'accepted': True, 'syncAt': 1794416588}"
+ },
+ {
+  "name": "10并发→终态syncAt=最大且layout.json完整",
+  "ok": true,
+  "detail": "{'codes': [200], 'syncAt': 1794416543, 'items': 37, 'archive': 7}"
+ },
+ {
+  "name": "layout.json 可解析（无半截JSON）",
+  "ok": true,
+  "detail": "json.load OK"
+ },
+ {
+  "name": "首报接受",
+  "ok": true,
+  "detail": "{'accepted': True, 'syncAt': 1794416564}"
+ },
+ {
+  "name": "同syncAt→older",
+  "ok": true,
+  "detail": "{'accepted': False, 'reason': 'older', 'latestSyncAt': 1794416564}"
+ },
+ {
+  "name": "25次上报→归档≤20份",
+  "ok": true,
+  "detail": "20"
+ },
+ {
+  "name": "归档+layout权限600",
+  "ok": true,
+  "detail": "({'0o600'}, '0o600')"
+ },
+ {
+  "name": "GET /layout 6次轮询→日志新增≤1条",
+  "ok": true,
+  "detail": "0"
+ },
+ {
+  "name": "body>1MB 实测状态码（工况矩阵写400）",
+  "ok": true,
+  "detail": "实际=0"
+ }
+]

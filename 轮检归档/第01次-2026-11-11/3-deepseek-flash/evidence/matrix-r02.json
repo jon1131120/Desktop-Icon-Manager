@@ -1,0 +1,57 @@
+[
+ {
+  "name": "2.1 mapCell A→A 与脚本公式逐点一致（189 点）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "2.1 mapCell A→B 与脚本公式逐点一致（189 点）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "2.1 mapCell A→C 与脚本公式逐点一致（189 点）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "2.1 mapCell B→A 与脚本公式逐点一致（171 点）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "2.1 mapCell B→B 与脚本公式逐点一致（171 点）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "2.1 mapCell B→C 与脚本公式逐点一致（171 点）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "2.1 mapCell C→A 与脚本公式逐点一致（198 点）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "2.1 mapCell C→B 与脚本公式逐点一致（198 点）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "2.1 mapCell C→C 与脚本公式逐点一致（198 点）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "2.2 全网格 12 方向零差异",
+  "ok": true,
+  "detail": "0"
+ },
+ {
+  "name": "2.3 右锚固定区 C→A→C 往返零漂移",
+  "ok": true,
+  "detail": "[]"
+ }
+]

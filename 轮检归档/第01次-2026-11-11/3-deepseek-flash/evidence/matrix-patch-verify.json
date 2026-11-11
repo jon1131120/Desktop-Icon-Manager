@@ -1,0 +1,42 @@
+[
+ {
+  "name": "补丁台架编译通过",
+  "ok": true,
+  "detail": "ast)\n     |                                   `- warning: left side of nil coalescing operator '??' has non-optional type 'Date', so the right side is never used\n2172 |         }.sorted { $0.2 > $1.2 }\n2173 | \n\n[#NoUsage]: <https://docs.swift.org/compiler/documentation/diagnostics/no-usage>\n[#VariableNeverMutated]: <https://docs.swift.org/compiler/documentation/diagnostics/variable-never-mutated>\n"
+ },
+ {
+  "name": "P2 修复验证：/Volumes/Jon113␣␣ 归位 (22,2)",
+  "ok": true,
+  "detail": "(22, 2)"
+ },
+ {
+  "name": "P1 修复验证：中段区全满 12s 内返回（旧实现死循环）",
+  "ok": true,
+  "detail": "0.0s"
+ },
+ {
+  "name": "P1 修复验证：日志明确「中段区已满，暂不搬移」",
+  "ok": true,
+  "detail": "2026-11-12 00:45:42: volumes: lastone 占 VIP1 位 → 弹中段区\n2026-11-12 00:45:42: volumes: 中段区已满，lastone 暂不搬移（避免死循环）\n"
+ },
+ {
+  "name": "P1 修复验证：不落重复格",
+  "ok": true,
+  "detail": "{}"
+ },
+ {
+  "name": "P3 修复验证：syncAt 字符串 → 400（旧实现 500）",
+  "ok": true,
+  "detail": "(400, b'{\"error\": \"syncAt must be an integer\"}')"
+ },
+ {
+  "name": "P2 修复验证：钟快 400s 时 hubServerTime 可用（日志有「本机时钟超前」）",
+  "ok": true,
+  "detail": "2026-11-12 00:45:44: hub: POST http://127.0.0.1:18890/layout -> 400 数据被拒：syncAt too far in future\n2026-11-12 00:45:44: hub: 使用地址 http://127.0.0.1:18890\n2026-11-12 00:45:44: sync: 本机时钟超前（中枢时间 1794415544），用中枢时间重发\n2026-11-12 00:45:44: sync: 上报中枢 ✅ 接受 fp=86f5c4946793c5f5 items=10\n"
+ },
+ {
+  "name": "P2 修复验证：用中枢时间重发后被接受",
+  "ok": true,
+  "detail": "Studio"
+ }
+]

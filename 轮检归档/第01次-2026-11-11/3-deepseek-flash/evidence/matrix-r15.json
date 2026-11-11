@@ -1,0 +1,37 @@
+[
+ {
+  "name": "15.1 构建产物存在",
+  "ok": true,
+  "detail": "/Users/jon/Projects/Desktop-Icon-Manager/QSpaceLayoutBar/build/QSpaceLayoutBar.app"
+ },
+ {
+  "name": "15.2 版本串可读",
+  "ok": true,
+  "detail": "['  \"CFBundleShortVersionString\" => \"1.0\"']"
+ },
+ {
+  "name": "15.3 deploy 脚本 APP_SRC 指向本项目构建产物",
+  "ok": true,
+  "detail": "106660"
+ },
+ {
+  "name": "15.4 cmp 脚本含位置级比对（v2）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "15.5 cmp 脚本含 VIP 名单排除",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "15.6 ❌ deploy 实例校验未加固：0 实例时 grep -c 退出 1 + set -e 静默中止（glm P5 未落实）",
+  "ok": true,
+  "detail": "(True, 1, '')"
+ },
+ {
+  "name": "15.7 ❌ 远程分支无实例数校验（只 grep 打印不判断）",
+  "ok": true,
+  "detail": ""
+ }
+]

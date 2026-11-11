@@ -1,0 +1,27 @@
+[
+ {
+  "name": "9.1 合盖残留旧屏号：33 项全部进快照（3 项被归并）",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=snap\nHARNESS snap spec=C items=33 fp=de91542eb61ec19b"
+ },
+ {
+  "name": "9.2 自愈日志明确归并 screen=2",
+  "ok": true,
+  "detail": "2026-11-12 00:43:04: screen: 屏号自愈：screen=2 的 3 项坐标落在主屏范围内 → 归入 screen=1\n"
+ },
+ {
+  "name": "9.3 真双屏：副屏 8 项不被误并（快照只含主屏 20 项）",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=snap\nHARNESS snap spec=B items=20 fp=f4ba1e0e030855c7"
+ },
+ {
+  "name": "9.4 真双屏：日志判定「真双屏」",
+  "ok": true,
+  "detail": "2026-11-12 00:43:04: screen: 屏号自愈跳过 screen=2（对主屏网格对齐率 25% < 80%，判定为真双屏）\n"
+ },
+ {
+  "name": "9.5 边界：副屏与主屏同套坐标（对齐率 100%）→ 会被并入（记录已知边界）",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=snap\nHARNESS snap spec=B items=28 fp=df8d269c3a5fb624"
+ }
+]

@@ -1,0 +1,27 @@
+[
+ {
+  "name": "19.1 selftest 全绿（126/126 = 42 点 × 3 对）",
+  "ok": true,
+  "detail": "SELFTEST PASS"
+ },
+ {
+  "name": "19.2 自检点数为 126（不是交接书说的 132）",
+  "ok": true,
+  "detail": "2026-11-12 00:40:52: selftest: 126/126 吻合（跳过超界点 0 个）\n2026-11-12 00:43:04: selftest: 126/126 吻合（跳过超界点 0 个）\n"
+ },
+ {
+  "name": "19.x 变异体「M1 右锚偏移一格」必须变红（selftest FAIL）",
+  "ok": true,
+  "detail": "SELFTEST FAIL"
+ },
+ {
+  "name": "19.x 变异体「M2 列 clamp 上界放宽」必须变红（selftest FAIL）",
+  "ok": false,
+  "detail": "SELFTEST PASS"
+ },
+ {
+  "name": "19.x 变异体「M3 中段行带不平移」必须变红（selftest FAIL）",
+  "ok": true,
+  "detail": "SELFTEST FAIL"
+ }
+]

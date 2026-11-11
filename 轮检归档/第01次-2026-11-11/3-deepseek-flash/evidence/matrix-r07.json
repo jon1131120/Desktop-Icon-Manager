@@ -1,0 +1,27 @@
+[
+ {
+  "name": "7.1 精简 conf：lod/hSp/font 按本机套补回（C: 96/11/11）",
+  "ok": true,
+  "detail": "HEAL lod=96 hSp=11 font=11"
+ },
+ {
+  "name": "7.2 精简 conf 触发一次告警（不刷屏）",
+  "ok": true,
+  "detail": "2026-11-12 00:43:03: ⚠️ conf 缺显示参数字段（可能被 QSpace 精简回写）→ 按本机套 C 自动补回\n"
+ },
+ {
+  "name": "7.3 已知边界：仅 4 个字段自愈，previewIcons/useStacks 等仍缺失（记录，不判失败）",
+  "ok": true,
+  "detail": "['HARNESS step[1] op=report']"
+ },
+ {
+  "name": "7.4 20 次原子写 + 1200 次并发读：坏 JSON 0 次",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "7.5 无残留 .tmp 文件",
+  "ok": true,
+  "detail": "['desktop.conf']"
+ }
+]

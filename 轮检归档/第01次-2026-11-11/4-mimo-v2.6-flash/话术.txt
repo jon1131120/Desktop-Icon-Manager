@@ -1,0 +1,81 @@
+<!-- sweep_task_key:8520d94108ea 流程标记请忽略 -->
+【背景说明】你是本次多模型轮检（第01次）的第 4/4 个模型（mimo-v2.6-flash，末位）。项目背景：QSpace 桌面图标跨机同步系统——Swift 菜单栏客户端（QSpaceLayoutBar）⇄ Python 中枢（hub-server.py :18878）。今天项目大修 9 提交 + 双实例事故 + 沙箱假隔离 P0 根治 + VIP 三格体系落地。前三位模型（MiniMax/glm/deepseek）已完成 90 轮检查，全部修复已落实。**所有操作严格限定在项目目录与 /tmp 沙箱内**。你是**检查模型，不是编排者**。先读下方交接书，复核前三位改动与你名单相关的高危项，再开始。
+
+【杰哥的检查指令·原文照发】
+做 30 轮全面的自我检查，以白纸的心态做，不要拿之前的清单改。
+如果之前有检查过的 先去复核他上一大轮改的对不对
+复核完成后，正式开始30 轮全面的自我检查，不要完全用全新的维度，保留我们这个链路最要紧的 15 个核心，主链也是要复查的，就算之前检查过 也要再次检查，包括最基础的代码/故障bug/主链路/逻辑/等，另外15轮 你可以找新的维度我要做的是大检查，检查我们整个项目所有链路、所有方面有没有问题。
+
+【本轮形态：实测模式（杰哥拍板）】
+沙箱真跑真测。真机零触碰与沙箱场景必跑是两个独立要求：
+- 真机零触碰：不许 killall/open 三台真机进程；不许写真机 desktop.conf；不许 POST 生产中枢 :18878；不许 ssh air/studio/minipc。Studio 完全不许动。
+- 沙箱场景必跑：15 工况全部真跑。**涉删除/覆盖类内容如被平台安全过滤拦截，如实记录后跳过该维度继续（不要卡死）**。
+
+# 实测模式工况矩阵（桌面图标同步 · 第01次多模型轮检）
+
+> 本项目 = QSpace 桌面图标跨机同步（Swift 菜单栏客户端 + Python 中枢）。
+> 实测模式：沙箱里真跑真测，不许纸上推演。每个工况贴「命令 + 真实输出 + ✅/❌/⚠️」。
+
+## 沙箱环境说明
+- **中枢 hub-server.py 是 Python，可直接沙箱真跑**：复制到 /tmp/sandbox_<你>/，改端口（如 18890/18891）起实例，全部工况在沙箱实例上测。
+- **客户端 main.swift 是 Swift，可编译跑 CLI**：--selftest（40 点标定纯算法自检）。**变异测试**：改源码副本 → 重编译 → 跑 selftest，验证测试有效性（退回旧写法必须变红）。
+- **真机零触碰**：不许 killall/open 三台真机的 QSpace Pro 与 QSpaceLayoutBar；不许写真机 ~/Library/Application Support/com.jinghaoshe.qspace.pro/desktop.conf；不许 POST 生产中枢 :18878（只许沙箱端口）；不许 ssh 到 air/studio/minipc 干扰。
+- **沙箱场景必跑**（与上一条分开，两个独立要求）：下方 15 个工况在沙箱内全部真跑，逐条记预期 vs 实际。
+
+## 15 个工况矩阵
+1. **新增文件对账**：中枢 37 项、客户端 38 项（多 1）→ 对账补报 → 中枢变 38。验证补报条件与「死条目复活不补报」的分界。
+2. **删除死条目清理**：中枢 38、客户端 37（少 1）→ 短缺计时 → 30 分钟（测试可注入缩短）→ 上报清理。验证「尊重删除」不提前补报。
+3. **防震荡**：A 机报 38（含 X）、B 机报 37（无 X）交替 → 中枢名单不摇摆（X 曾在中枢 → 不补报）。
+4. **快速连续变化**：客户端 conf 连续变更 5 次（间隔 <10s 防抖窗口）→ 只上报最终版，无中间态污染。
+5. **QSpace 精简回写**：模拟 QSpace 把 conf 写成精简版（只留 visible+itemAttrs）→ 参数自愈补回 lod 等。
+6. **conf 损坏**：写入坏 JSON → loadConf 拒绝 + 日志告警，同步暂停不崩。
+7. **conf 缺失**：文件不存在 → 明确返回 nil 不崩。
+8. **屏号失真**：itemAttrs 混入 screen=2 的旧屏号项（坐标在主屏范围）→ normalizeScreenIds 归入主屏。
+9. **双写竞争**：两个写者同时写 conf（模拟）→ 原子写（tmp+rename）保证不出现半个 JSON。
+10. **门禁矩阵**：token 错→401 / 网段外→403 / body>1MB→400 / items>500→400 / 坏 JSON→400 / 时间超前 300s→400，各一条实测。
+11. **并发 POST**：10 并发写不同 syncAt → _state_lock 保证最终一致性，无交叉写坏。
+12. **保护窗**：active 上报 vs 非 active 上报冲突 → 非 active 被拒 reason=protected。
+13. **时钟偏移**：客户端钟落后 → clockOffset 补偿后上报成功。
+14. **空布局拦截**：items=[] → 双向拦截（客户端拒发 + 中枢拒收）。
+15. **40 点标定回归**：--selftest 120/120 吻合 + 变异测试（改 mapCell 一行 → selftest 必须变红）。
+
+## 附：模块清单（逐个给结论，一个不许跳）
+- QSpaceLayoutBar/main.swift（2288 行）：mapCell v6 / normalizeScreenIds / 名单对账 / 防震荡 / 参数自愈 / atomicWrite 强杀 / overlap 修复 / 保护窗 / 吸收期 / 快照 / 菜单恢复
+- hub/hub-server.py（330 行）：门禁三层 / _state_lock / syncAt 先于保护窗 / archive / 日志节流
+- scripts/qspace-deploy.sh / qspace-rollback.sh / qspace-uninstall.sh / check-layout.py / cmp-consistency.py / test-hub.py（17 项契约）
+
+
+# 核心 15 维度（主链）
+1. 同步主链路（拖动→采样→上报→中枢→拉取→应用→校验）
+2. 映射正确性（mapCell v6 两段直通：右锚+贴组件）
+3. 对账逻辑（补报/清理/防震荡三态）
+4. 保护窗（active 判定/拒绝/退避/窗开重报）
+5. 吸收期与防抖（回声链斩断）
+6. conf 原子写与参数自愈
+7. 屏号自愈（normalizeScreenIds）
+8. overlap 修复（kept 进 used/推移/熔断）
+9. 快照链（自动快照/恢复/mtime 排序）
+10. 门禁三层（网段/token/校验）
+11. 中枢并发安全（_state_lock/syncAt 排序）
+12. 灾难恢复（快照回滚/中枢重建）
+13. 部署一致性（三台 md5/版本）
+14. 故障日志与可观测（关键路径留痕）
+15. 边界与异常（空布局/坏 JSON/缺字段/越界）
+
+
+【硬性交付条款】
+①每轮立即向 /Users/jon/Projects/Desktop-Icon-Manager/轮检归档/第01次-2026-11-11/4-mimo-v2.6-flash/进度.log 追加：`第X轮｜维度｜结论｜证据(文件:行号)｜是否改动`（全角｜）。
+②完整台账 30 行（半角竖线五段）写同目录 台账.md，不足 30 行=未完成。
+③修复代码放同目录 evidence/，不改生产文件。
+④台账开头「复核专区」：对前三位+主会话改动逐项给结论。正文后不写 `第N轮|` 表格。
+⑤不要跨 profile 同步/重命名会话/写交接书汇整书。
+⑥每 5 轮增量写台账。
+
+【交付前自检（不许跳）】
+python3 /Users/jon/.hermes/skills/multi-model-review-sweep/scripts/validate_ledger.py <台账.md> --min-rows 30 --min-dims 15 --require-review --check-evidence /Users/jon/Projects/Desktop-Icon-Manager
+
+【关键材料】
+- 项目根: /Users/jon/Projects/Desktop-Icon-Manager（基线 4239482）
+- 前三位产物: 同目录 1-/2-/3- 三个模型目录
+- 真隔离沙箱: /tmp/build_sandbox.sh
+- 生产中枢 :18878 绝对不许碰

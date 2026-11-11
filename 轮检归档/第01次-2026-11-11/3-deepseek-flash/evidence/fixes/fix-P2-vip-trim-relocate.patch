@@ -1,0 +1,13 @@
+--- a/QSpaceLayoutBar/main.swift	2026-11-12 00:44:30
++++ b/QSpaceLayoutBar/main.swift	2026-11-12 00:44:30
+@@ -1000,7 +1000,9 @@
+         for (i, it) in attrs.enumerated() {
+             guard let n = it["name"] as? String else { continue }
+             let base = (n as NSString).lastPathComponent
+-            guard names.contains(n) || names.contains(base) else { continue }
++            // ⭐ 归位判据与第一遍同源（第01次轮检 deepseek R20 实测：旧写法精确匹配，
++            //   /Volumes/Jon113␣␣（QSpace 卷宗名常带尾随空格）永远匹配不上 → VIP 永不归位）
++            guard vipSlotRow(n) == row else { continue }
+             guard let x = (it["x"] as? NSNumber)?.intValue,
+                   let y = (it["y"] as? NSNumber)?.intValue else { continue }
+             let c = max(1, min(spec.cols, safeInt((Double(x) - spec.x0) / spec.colStep, fallback: -1) + 1))

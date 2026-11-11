@@ -757,6 +757,19 @@ func runMappingSelfTest() -> Bool {
             else { logLine("selftest FAIL \(sk)->\(dk) #\(p.n) \(src) -> \(got) expect \(dst)") }
         }
     }
+    // ⭐ 上界 clamp 覆盖（第01次轮检 4-mimo R20 实测）：暴力枚举三套全部 1674 个映射，
+    //   pre-clamp dc > d.cols 的只有 C→B (16,7) 这 1 个（dc=20 > 19），它既不在 42 个
+    //   标定点里、也不在 pairs 的三方向里（pairs 无 C→B）→ 变异 M4（上界放宽）恒绿。
+    //   此处补一条定向断言：生产上该格会被 clamp 到 (19,7)，回归必须守住。
+    let clampCases: [(GridSpec, GridSpec, (Int, Int), (Int, Int))] = [
+        (SPEC_C, SPEC_B, (16, 7), (19, 7)),
+    ]
+    for (fs, ts, csrc, want) in clampCases {
+        let got = mapCell(from: fs, to: ts, col: csrc.0, row: csrc.1)
+        total += 1
+        if got == want { pass += 1 }
+        else { logLine("selftest FAIL clamp \(fs.key)->\(ts.key) \(csrc) -> \(got) expect \(want)") }
+    }
     logLine("selftest: \(pass)/\(total) 吻合（跳过超界点 \(skipped) 个）")
     return pass == total && total > 0
 }
@@ -1019,11 +1032,19 @@ func relocateStrayVolumes(_ conf: [String: Any]) -> [String: Any]? {
     // 弹去中段区第一个空格：从左列到右列、从上到下
     var cursor = (spec.midZone.0, 1)
     for mv in evict {
+        var guard_steps = 0
         while occupied.contains("\(cursor.0),\(cursor.1)") {
+            guard_steps += 1
+            if guard_steps > spec.rows * (spec.midZone.1 - spec.midZone.0 + 1) {
+                // 中段区全满：放弃本个弹开（留原位+告警），绝不死循环（mimo 轮检 R16 实锤 8 秒超时）
+                logLine("volumes: ⚠️ 中段区已满，\((mv.name as NSString).lastPathComponent) 暂留原位")
+                break
+            }
             cursor.1 += 1
             if cursor.1 > spec.rows { cursor.1 = 1; cursor.0 += 1 }
             if cursor.0 > spec.midZone.1 { cursor.0 = spec.midZone.0 }
         }
+        if guard_steps > spec.rows * (spec.midZone.1 - spec.midZone.0 + 1) { continue }
         let nx = spec.x0 + Double(cursor.0 - 1) * spec.colStep
         let ny = spec.y0 + Double(cursor.1 - 1) * spec.rowStep
         attrs[mv.idx]["x"] = Int(nx)

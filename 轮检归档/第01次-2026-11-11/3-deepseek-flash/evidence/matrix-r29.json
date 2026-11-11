@@ -1,0 +1,22 @@
+[
+ {
+  "name": "29.1 sync-state 损坏：返回 {} 不崩、能正常上报",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=bc\nHARNESS bc done"
+ },
+ {
+  "name": "29.2 conf 只读：写入失败留痕、进程 exit 0",
+  "ok": true,
+  "detail": "y file via mktemp failed. Creating the temporary file via _amkrtemp previously also failed with errno 13, NSUnderlyingError=0x7729034180 {Error Domain=NSPOSIXErrorDomain Code=13 \"Permission denied\"}}\n"
+ },
+ {
+  "name": "29.3 日志目录异常：进程仍正常退出",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=print\nHARNESS note: ok"
+ },
+ {
+  "name": "29.4 非本机桌面路径项被忽略（快照 3 项）",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=snap\nHARNESS snap spec=C items=3 fp=cfd30f0a35cd4c44"
+ }
+]

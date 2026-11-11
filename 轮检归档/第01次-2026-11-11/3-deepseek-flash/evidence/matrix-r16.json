@@ -1,0 +1,27 @@
+[
+ {
+  "name": "16.1 GET 节流：4 次轮询只新增 ≤1 条日志",
+  "ok": true,
+  "detail": "(58, 59)"
+ },
+ {
+  "name": "16.2 401 落日志 REJECT token",
+  "ok": true,
+  "detail": "ncAt=1794415384 items=10  -> ACCEPTED (fp=86f5c494)\n2026-11-12 00:43:04 INFO GET /layout  localhost  <- hub[MBP syncAt=1794415384 items=10]\n2026-11-12 00:43:04 WARNING REJECT token: 127.0.0.1 /layout\n"
+ },
+ {
+  "name": "16.3 客户端 401 日志含「令牌失效」指引",
+  "ok": true,
+  "detail": "00:43:04: hub: POST http://127.0.0.1:18890/layout -> 401 令牌失效（hub-token.txt 与中枢不一致）\n2026-11-12 00:43:04: hub: 使用地址 http://127.0.0.1:18890\n2026-11-12 00:43:04: sync: 上报被拒（中枢 syncAt=?），下轮用新时间戳重推，本轮不拉远端\n"
+ },
+ {
+  "name": "16.4 日志前缀 sync: 存在",
+  "ok": true,
+  "detail": " hub: 使用地址 http://127.0.0.1:18890\n2026-11-12 00:43:04: sync: 上报中枢 ✅ 接受 fp=86f5c4946793c5f5 items=10\n"
+ },
+ {
+  "name": "16.4 日志前缀 hub: 存在",
+  "ok": true,
+  "detail": " hub: 使用地址 http://127.0.0.1:18890\n2026-11-12 00:43:04: sync: 上报中枢 ✅ 接受 fp=86f5c4946793c5f5 items=10\n"
+ }
+]

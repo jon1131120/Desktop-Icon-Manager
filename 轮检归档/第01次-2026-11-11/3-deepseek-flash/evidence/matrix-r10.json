@@ -1,0 +1,27 @@
+[
+ {
+  "name": "10.1 kept 队尾：应用后同格重叠 0（两段式预登记生效）",
+  "ok": true,
+  "detail": "{}"
+ },
+ {
+  "name": "10.2 应用统计 matched=9 kept=1",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=applyfile\nHARNESS applyfile matched=9 kept=1 moved=9"
+ },
+ {
+  "name": "10.3 本机同格重叠自动推开（同格 0 个）",
+  "ok": true,
+  "detail": "{}"
+ },
+ {
+  "name": "10.4 overlap 日志留痕",
+  "ok": true,
+  "detail": "26-11-12 00:43:04: overlap: 「f02」(10,1) → (11,1) 自动推开\n2026-11-12 00:43:04: overlap: 「f03.txt」(10,1) → (12,1) 自动推开\n2026-11-12 00:43:04: overlap: 「f04」(10,1) → (13,1) 自动推开\n2026-11-12 00:43:04: overlap: 本机 3 个重叠图标已自动推开（第 1 次）\n2026-11-12 00:43:04: STUB atomicWrite: conf written (QSpace kill/restart 打桩)\n"
+ },
+ {
+  "name": "10.5 最右列越界修正：所有 x 在屏宽内（x ≤ 1710-32）",
+  "ok": true,
+  "detail": "[(791, 'f01'), (791, 'f02'), (1028, 'f03.txt')]"
+ }
+]

@@ -1,0 +1,62 @@
+[
+ {
+  "name": "22.x qspace-deploy.sh 语法检查通过",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "22.x qspace-rollback.sh 语法检查通过",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "22.x qspace-uninstall.sh 语法检查通过",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "22.1 回滚列表/选择用同一 select_archive（编号不串）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "22.2 回滚 payload sourceMachine 白名单内 + rollbackOf 独立字段",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "22.3 ❌ --local 路径 sourceMachine 硬编码 MBP（Air/Studio 本地快照回滚会标错来源，P3）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "22.4 ❌ --local 的套判定 maxx>1600→B：A 套最右列 x=1660 会被误判成 B（实测计算）",
+  "ok": true,
+  "detail": "1660"
+ },
+ {
+  "name": "22.5 回滚强制新 syncAt（否则被判 older）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "22.6 空归档内容中止（不把中枢清空）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "22.7 ❌ 卸载脚本 all 模式直接 rm -rf ~/qspace-hub（中枢真源+20 份归档全删，无确认无备份，P2 安全项）",
+  "ok": true,
+  "detail": "['        ssh -o BatchMode=yes minipc \"sudo -n systemctl disable --now qspace-hub; sudo -n rm -f /etc/systemd/system/qspace-hub.service; sudo -n systemctl daemon-reload; rm -rf ~/qspace-hub\"']"
+ },
+ {
+  "name": "22.8 deploy 幂等：先 bootout/killall 再 cp（可重复执行）",
+  "ok": true,
+  "detail": ""
+ },
+ {
+  "name": "22.9 deploy 首次部署分发令牌并 chmod 600",
+  "ok": true,
+  "detail": ""
+ }
+]

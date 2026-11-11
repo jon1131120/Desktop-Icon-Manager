@@ -1,0 +1,94 @@
+{
+ "results": [
+  {
+   "name": "拉取→应用→校验 全链路留痕",
+   "ok": true,
+   "detail": "{'lines': ['2026-11-12 01:55:49: sync: 拉取中枢 syncAt=1794419799 source=Air items=10 fp=fp-remote-air [切套强制]', '2026-11-12 01:55:49: sync: 应用 source=Air 套 A→B matched=10 moved=5 kept=0', '2026-11-12 01:55:49: sync: 校验 ok=true checked=10 bad=0 total=10']}"
+  },
+  {
+   "name": "应用后无同格重叠",
+   "ok": true,
+   "detail": "{'dups': {}}"
+  },
+  {
+   "name": "verify 校验通过（ok=true）",
+   "ok": true,
+   "detail": "['2026-11-12 01:55:49: sync: 校验 ok=true checked=10 bad=0 total=10']"
+  },
+  {
+   "name": "吸收期内 bc 不上报",
+   "ok": true,
+   "detail": "{'delta': 0, 'log': []}"
+  },
+  {
+   "name": "吸收期基线跟随本机（baseline 已更新）",
+   "ok": true,
+   "detail": "a8b9d45e40fb"
+  },
+  {
+   "name": "同格重叠 → 自动推开 0 残留",
+   "ok": true,
+   "detail": "{'dups': {}, 'log': ['2026-11-12 01:55:49: overlap: 本机 1 个重叠图标已自动推开（第 1 次）']}"
+  },
+  {
+   "name": "同分钟同名 3 连存防撞（-1/-2 序号）",
+   "ok": true,
+   "detail": "['[MBP] 测试A-1.json', '[MBP] 测试A-2.json', '[MBP] 测试A.json']"
+  },
+  {
+   "name": "内容未变二次 autosnap 跳过（same=true）",
+   "ok": true,
+   "detail": "(1, 1)"
+  },
+  {
+   "name": "24h 保底触发新快照",
+   "ok": true,
+   "detail": "(1, 2)"
+  },
+  {
+   "name": "restore 快照还原乱位（多数图标回原位）",
+   "ok": true,
+   "detail": "{'restored': 8, 'expect': 8}"
+  },
+  {
+   "name": "prune 自动快照只留 10 份",
+   "ok": true,
+   "detail": "10"
+  },
+  {
+   "name": "风暴保护触发（日志+不上报）",
+   "ok": true,
+   "detail": "{'delta': 0, 'log': ['2026-11-12 01:55:49: sync: 风暴保护，暂停上报']}"
+  },
+  {
+   "name": "中枢不可达 → 上报失败退避 + 拉取失败退避",
+   "ok": true,
+   "detail": "{'bc': ['2026-11-12 01:55:50: sync: 上报失败（网络不可达），10 秒后重试（连续 1 次）'], 'pull': ['2026-11-12 01:55:50: sync: 拉取失败（网络不可达），20 秒后重试（连续 2 次）']}"
+  },
+  {
+   "name": "网络恢复 → 拉取成功且退避归零（streak 清零日志）",
+   "ok": true,
+   "detail": "['2026-11-12 01:55:53: sync: 拉取恢复，退避归零（此前连续失败 3 次）']"
+  },
+  {
+   "name": "非 active 覆盖被拒 reason=protected → 客户端跟随对方",
+   "ok": true,
+   "detail": "['2026-11-12 01:55:53: sync: 上报被保护窗拒绝（Air 用户操作中）→ 先跟随对方，窗开后自动重报本机版本']"
+  },
+  {
+   "name": "被 protected 拒后 baseline 不吞改动（baseline ≠ fp2）",
+   "ok": true,
+   "detail": "{'baseline': 'ce5ad6ce11e8', 'fp2': '35fc0484be4c'}"
+  },
+  {
+   "name": "窗开后本机改动重报被接受（后改者赢/停手者赢）",
+   "ok": true,
+   "detail": "{'src': 'MBP', 'syncAt': 1794419969, 'expect': 1794419969, 'log': ['2026-11-12 01:55:53: sync: 上报中枢 ✅ 接受 fp=35fc0484be4c27c4 items=10']}"
+  },
+  {
+   "name": "layout.json=600；hub.log 记录观察（当前 umask 决定）",
+   "ok": true,
+   "detail": "{'/tmp/mimo_sandbox/data/layout.json': '0o600', '/tmp/mimo_sandbox/data/hub.log': '0o644'}"
+  }
+ ]
+}

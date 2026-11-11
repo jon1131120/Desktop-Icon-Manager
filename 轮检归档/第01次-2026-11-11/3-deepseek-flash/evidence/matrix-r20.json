@@ -1,0 +1,47 @@
+[
+ {
+  "name": "20.1 内置盘归位 (22,1)",
+  "ok": true,
+  "detail": "(22, 1)"
+ },
+ {
+  "name": "20.2 Jon113（尾随双空格）归位 (22,2)",
+  "ok": false,
+  "detail": "(2, 1)"
+ },
+ {
+  "name": "20.3 SynologyDrive 归位 (22,3)",
+  "ok": true,
+  "detail": "(22, 3)"
+ },
+ {
+  "name": "20.4 临时卷宗入右锚区 → 弹进中段区 (12~17)",
+  "ok": true,
+  "detail": "(12, 3)"
+ },
+ {
+  "name": "20.5 非 VIP 占 VIP 格 → 弹进中段区",
+  "ok": true,
+  "detail": "(12, 4)"
+ },
+ {
+  "name": "20.6 VIP 三格互不重叠且无第二项占位",
+  "ok": false,
+  "detail": "[('', 2493, 40), ('SynologyDrive', 2493, 336)]"
+ },
+ {
+  "name": "20.7 apply 端 VIP 三格永久禁占（映射项被推开）",
+  "ok": true,
+  "detail": "[]"
+ },
+ {
+  "name": "20.8 ❌ 中段区全满时 relocateStrayVolumes 死循环（>12s 无返回，主线程将卡死）",
+  "ok": false,
+  "detail": "timeout"
+ },
+ {
+  "name": "20.9 溢出卷宗未被塞进中段区（无重复格）",
+  "ok": false,
+  "detail": "skip"
+ }
+]

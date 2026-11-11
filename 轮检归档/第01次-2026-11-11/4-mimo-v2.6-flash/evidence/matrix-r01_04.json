@@ -1,0 +1,49 @@
+{
+ "results": [
+  {
+   "name": "首轮上报中枢=37",
+   "ok": true,
+   "detail": "{'items': 37, 'src': 'MBP'}"
+  },
+  {
+   "name": "本机38 vs 中枢37 → 对账补报 → 中枢38",
+   "ok": true,
+   "detail": "{'before': 37, 'after': 38, 'log': ['2026-11-12 01:20:16: sync: 名单对账：本机 38 项 vs 中枢 37 项 → 补报新增图标位置（豁免 lastBC）'], 'out': [')', ', \"lastAppliedFingerprint\": eff939d9774e2fcf, \"lastBroadcastFingerprint\": eff939d9774e2fcf, \"applyLogicVersion\": 2]', 'HARNESS step[3] op=bc', 'HARNESS bc done']}"
+  },
+  {
+   "name": "短缺 20s 内不清理（等 iCloud/尊重删除）",
+   "ok": true,
+   "detail": "{'items': 38, 'log': ['2026-11-12 01:20:16: sync: 名单对账：本机 38 项 vs 中枢 37 项 → 补报新增图标位置（豁免 lastBC）'], 'out': ['HARNESS step[3] op=rt', 'HARNESS rt set [\"ledgerShortSince\"]', 'HARNESS step[4] op=bc', 'HARNESS bc done']}"
+  },
+  {
+   "name": "短缺>30分钟 → 上报清理 → 中枢37",
+   "ok": true,
+   "detail": "{'items': 37, 'log': ['2026-11-12 01:20:17: sync: 名单对账：短缺持续 30 分钟 → 判定中枢含已删文件死条目 → 上报清理（本机 37 项）'], 'out': [')', ', \"baselineFingerprint\": eff939d9774e2fcf, \"pendingRepushFp\": , \"lastBroadcastFingerprint\": 72c0134bb78fd351, \"lastBroadcastAt\": 1794417636, \"applyLogicVersion\": 2]', 'HARNESS step[4] op=bc', 'HARNESS bc done']}"
+  },
+  {
+   "name": "本机多出曾在中枢的 f38 → 不补报（尊重删除）",
+   "ok": true,
+   "detail": "{'items': 37, 'log': ['2026-11-12 01:20:17: sync: 名单对账：1 项曾在中枢后被删除（iCloud 未同步到本机）→ 不补报，尊重删除'], 'out': [')', ']', 'HARNESS step[5] op=bc', 'HARNESS bc done']}"
+  },
+  {
+   "name": "A(38)/B(37) 交替 6 轮中枢不摇摆（恒38）",
+   "ok": true,
+   "detail": "[38, 38, 38, 38, 38, 38]"
+  },
+  {
+   "name": "5 次快速变更+停手16s → 全程恰好 2 次上报（首轮+最终版）",
+   "ok": true,
+   "detail": "{'delta': 2, 'hub_items': 10, 'out': ['HARNESS bc done', 'HARNESS step[18] op=now', 'HARNESS step[19] op=bc', 'HARNESS bc done']}"
+  },
+  {
+   "name": "变更被识别为用户拖动（进保护窗，≥1 条日志）",
+   "ok": true,
+   "detail": "['2026-11-12 01:20:17: sync: 检测到用户拖动（10 个图标位移）→ 本机进入 10 分钟操作保护窗']"
+  },
+  {
+   "name": "防抖窗口内中间态零上报",
+   "ok": true,
+   "detail": "{'accepted_delta': 2}"
+  }
+ ]
+}

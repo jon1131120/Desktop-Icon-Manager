@@ -1,0 +1,27 @@
+[
+ {
+  "name": "14.1 快照回滚把 5 项乱位全部还原",
+  "ok": true,
+  "detail": "[(798, 40), (911, 40), (1024, 40), (1137, 40), (1250, 40)]"
+ },
+ {
+  "name": "14.2 中枢 layout.json 损坏：GET 200 且返回 {}",
+  "ok": true,
+  "detail": "(200, {})"
+ },
+ {
+  "name": "14.3 损坏时 /status 仍可用（hasLayout=false）",
+  "ok": true,
+  "detail": "(200, {'ok': True, 'hasLayout': False, 'syncAt': None, 'sourceMachine': None, 'iconCount': 0, 'archiveCount': 20, 'serverTime': 1794415384})"
+ },
+ {
+  "name": "14.4 中枢清空后同一客户端能重建（首轮上报成功）",
+  "ok": true,
+  "detail": "20"
+ },
+ {
+  "name": "14.5 ⚠️ 观察：baseline 已对齐的客户端在中枢清空后不补报（中枢保持空，需人工回滚/任一机改动）",
+  "ok": true,
+  "detail": "(20, 0)"
+ }
+]

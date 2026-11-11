@@ -1,0 +1,27 @@
+[
+ {
+  "name": "8.1 坏 JSON：loadConf 返回 nil（snap NIL）",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=snap\nHARNESS snap NIL\nHARNESS step[2] op=bc\nHARNESS bc done"
+ },
+ {
+  "name": "8.2 坏 JSON：日志告警「解析失败」",
+  "ok": true,
+  "detail": "2026-11-12 00:43:04: ⚠️ loadConf: desktop.conf 解析失败（文件可能损坏，同步已暂停）\n2026-11-12 00:43:04: ⚠️ loadConf: desktop.conf 解析失败（文件可能损坏，同步已暂停）\n2026-11-12 00:43:04: sync: 广播跳过（desktop.conf 读不到或损坏），本轮不发\n"
+ },
+ {
+  "name": "8.3 坏 JSON：广播跳过不崩（进程 exit 0）",
+  "ok": true,
+  "detail": "2026-11-12 00:43:04: ⚠️ loadConf: desktop.conf 解析失败（文件可能损坏，同步已暂停）\n2026-11-12 00:43:04: ⚠️ loadConf: desktop.conf 解析失败（文件可能损坏，同步已暂停）\n2026-11-12 00:43:04: sync: 广播跳过（desktop.conf 读不到或损坏），本轮不发\n"
+ },
+ {
+  "name": "8.4 conf 缺失：返回 nil 不崩",
+  "ok": true,
+  "detail": "HARNESS step[0] op=now\nHARNESS step[1] op=snap\nHARNESS snap NIL\nHARNESS step[2] op=bc\nHARNESS bc done"
+ },
+ {
+  "name": "8.5 conf 缺失：日志留痕",
+  "ok": true,
+  "detail": "析失败（文件可能损坏，同步已暂停）\n2026-11-12 00:43:04: ⚠️ loadConf: desktop.conf 解析失败（文件可能损坏，同步已暂停）\n2026-11-12 00:43:04: sync: 广播跳过（desktop.conf 读不到或损坏），本轮不发\n2026-11-12 00:43:04: sync: 广播跳过（desktop.conf 读不到或损坏），本轮不发\n"
+ }
+]
