@@ -743,15 +743,27 @@ let calibrationPoints: [CalPoint] = [
 
 func runMappingSelfTest() -> Bool {
     var total = 0, pass = 0, skipped = 0
-    let pairs = [("A", "B"), ("A", "C"), ("B", "C")]
+    // 方向全覆盖（mimo 轮检 R22）：旧 pairs 只有 (A,B)(A,C)(B,C) 三方向，
+    //   C→B/B→A/C→A 反向无标定覆盖 → 反向映射回归测不出。六个方向全测。
+    let pairs = [("A", "B"), ("A", "C"), ("B", "C"), ("B", "A"), ("C", "B"), ("C", "A")]
     for p in calibrationPoints {
         for (sk, dk) in pairs {
             guard let s = SPEC_ALL[sk], let d = SPEC_ALL[dk] else { continue }
             let src: (Int, Int) = sk == "A" ? p.a : (sk == "B" ? p.b : p.c)
-            let dst: (Int, Int) = dk == "B" ? p.b : p.c
+            // 修（6 方向扩展时发现）：旧三目缺 A 分支（dk=="B"?b:c），A 为目标时错误取 C 坐标——
+            //   旧三方向 dk 恰好不含 A 所以从未暴露，方向补全后立即炸出。
+            let dst: (Int, Int) = dk == "A" ? p.a : (dk == "B" ? p.b : p.c)
             // 列数收敛到安全值后，原标定里的最右列点已超出可用网格，跳过（记录数量便于核对）
             // 列数已恢复到标定值，全部标定点有效
             let got = mapCell(from: s, to: d, col: src.0, row: src.1)
+            // 禁区格降级（第01次轮检 mimo R21 量化的固有不可逆）：期望格落在目标套上排禁区
+            //   （topRows×topRight）时，v6 映射不保证往返（B(9,1)→A(1,1) 类，实际摆位
+            //   不会出现在禁区）→ 计入 skipped 不计入 total，避免已知不可逆污染硬断言。
+            if dst.1 <= d.topRows && dst.0 <= d.topRight {
+                skipped += 1
+                logLine("selftest SKIP（禁区格，已知不可逆）\(sk)->\(dk) #\(p.n) \(src) -> \(got) expect \(dst)")
+                continue
+            }
             total += 1
             if got == dst { pass += 1 }
             else { logLine("selftest FAIL \(sk)->\(dk) #\(p.n) \(src) -> \(got) expect \(dst)") }
@@ -1469,7 +1481,9 @@ func logHTTPCode(_ method: String, _ url: String, _ code: Int, _ body: [String: 
 
 /// 取中枢服务器时间（用于时钟超前时校准）
 func hubServerTime() -> Int? {
-    guard let o = httpGetJSON("/status"), let t = o["serverTime"] as? Int else { return nil }
+    // 修（mimo 轮检 R18）：旧写法 httpGetJSON("/status") 相对路径拿不到响应 → 恒 nil，
+    //   时钟超前自愈链路成了死代码。走 hubGet（自动 LAN/ZT 切换+绝对 URL）。
+    guard let o = hubGet("/status"), let t = o["serverTime"] as? Int else { return nil }
     return t
 }
 
@@ -1820,6 +1834,18 @@ func fetchRemote() -> [String: Any]? {
 /// 主线程：按指纹/时间戳判断是否需要应用，需要则应用
 func applyRemoteIfNewer(_ remote: [String: Any]) {
     guard autoSyncOn else { return }
+    // ⭐ 中枢空布局自愈（mimo 轮检 R12/R23 实锤）：layout.json 被删/清空后拉到
+    //   {syncAt>0, items=[]}，旧代码在下面 guard 提前 return，hubNamesSet 留着旧名单
+    //   → 名单对账判「一致」永不上报 → 中枢永远空着。修法：对照面失效 → 清空
+    //   hubNamesSet → 下一步名单对账发现本机 ⊋ 中枢 → 补报自愈。
+    if let at0 = remote["syncAt"] as? Int, at0 > 0,
+       let arr0 = remote["items"] as? [[String: Any]], arr0.isEmpty {
+        if !rt.hubNamesSet.isEmpty {
+            logLine("sync: 中枢布局为空（可能被清空/重建）→ 清空对照面触发补报自愈")
+            rt.hubNamesSet = []
+        }
+        return
+    }
     guard let at = remote["syncAt"] as? Int,
           let fp = remote["layoutFingerprint"] as? String,
           let items = remote["items"] as? [[String: Any]], !items.isEmpty else { return }

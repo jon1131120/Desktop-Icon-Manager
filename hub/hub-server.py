@@ -233,7 +233,13 @@ class H(BaseHTTPRequestHandler):
             logger.warning("POST /layout rejected: body is not an object")
             self._json(400, {'error': 'body must be a JSON object'})
             return
-        at = int(data.get('syncAt', 0) or 0)
+        try:
+            at = int(data.get('syncAt', 0) or 0)
+        except (TypeError, ValueError):
+            # syncAt 非数字（如 "abc"）→ 400 输入错误，不能 500（mimo 轮检 R24/第3位 fuzz 实锤）
+            logger.warning("POST /layout rejected: syncAt is not a number: %r", data.get('syncAt'))
+            self._json(400, {'error': 'syncAt must be an integer'})
+            return
         src = str(data.get('sourceMachine', '?'))[:100]
         now = int(time.time())
         if at <= 0:

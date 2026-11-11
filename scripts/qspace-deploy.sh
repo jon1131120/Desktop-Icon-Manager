@@ -54,7 +54,13 @@ deploy_one() {
         echo -n '实例数: '; ps -Ao comm | grep -c 'QSpaceLayoutBar$'
         # 实例数强校验（2026-11-11 轮检 R13/R25）：双实例是此前大量怪象的根因，
         #   旧脚本只打印不断续 -> 部署出 2 个实例也没人知道。这里 >1 直接判失败。
-        local CNT; CNT=$(ps -Ao comm | grep -c 'QSpaceLayoutBar$')
+        local CNT; CNT=$(ps -Ao comm | grep -c 'QSpaceLayoutBar$' || true)
+        # 0 实例容错（glm 轮检 R7/P5）：grep -c 无匹配退出码 1，set -e 下静默中止 all 部署。
+        #   0 实例也是失败（bootstrap 没起来）→ 显式报错并返回 1，绝不静默。
+        if [ -z "$CNT" ] || [ "$CNT" -eq 0 ] 2>/dev/null; then
+            echo "实例数=0！bootstrap 未生效，部署失败"
+            return 1
+        fi
         if [ "$CNT" -gt 1 ]; then
             echo "实例数=$CNT (>1) 双实例！请 killall 后重试"
             exit 1
