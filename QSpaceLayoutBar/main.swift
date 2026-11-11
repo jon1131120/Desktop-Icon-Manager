@@ -71,12 +71,26 @@ func currentFingerprint() -> String {
     return screens.map { "\(Int($0.frame.width))x\(Int($0.frame.height))" }.joined(separator: "+")
 }
 
+var missingSettingsWarned = false   // 参数缺失告警只打一次（防每 10 秒刷屏）
 func loadConf() -> [String: Any]? {
     guard let data = FileManager.default.contents(atPath: confPath) else { return nil }
     guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
         // conf 损坏会让所有同步静默跳过，必须留痕（否则排查时完全无线索）
         logLine("⚠️ loadConf: desktop.conf 解析失败（文件可能损坏，同步已暂停）")
         return nil
+    }
+    // ⭐ 显示参数自愈（2026-11-11 Studio 实录）：conf 只剩 {visible, itemAttrs}，
+    //   lod/间距/fontSize 全丢 → QSpace 按默认渲染（图标 64+间距最小）→ 45 图标挤成右缘竖条。
+    //   读到缺 lod 时按本机套补回内存副本（下次写盘随 nc=conf 落盘，磁盘自愈）。
+    if obj["lod"] == nil, let attrs = obj["itemAttrs"] as? [[String: Any]],
+       let ctx = localGridContext(attrs: attrs) {
+        if !missingSettingsWarned {
+            logLine("⚠️ conf 缺显示参数字段（可能被 QSpace 精简回写）→ 按本机套 \(ctx.spec.key) 自动补回")
+            missingSettingsWarned = true
+        }
+        var fixed = obj
+        for (k, v) in specSettings(ctx.spec) { fixed[k] = v }
+        return fixed
     }
     return obj
 }
@@ -1040,6 +1054,9 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
     var nc = conf
     nc["itemAttrs"] = out
     // 参数随套应用：目标屏该用哪套就写哪套（开合盖自动切换，根治"合盖设置套到内屏溢出"）
+    // ⭐ 只覆盖这 4 个套参数，conf 其余字段（snapToGrid/labelPosition/useStacks/previewIcons 等
+    //   用户在 QSpace 里调的显示设置）必须原样保留——2026-11-11 Studio 实录：写回时只带 4 字段，
+    //   QSpace 读到其余字段缺失 → 全部回退默认（图标 64+间距最小）→ 45 个图标挤成右缘竖条。
     for (k, v) in specSettings(dst) { nc[k] = v }
     return (nc, matched, kept, moved)
 }
@@ -1387,9 +1404,24 @@ func broadcastIfNeeded() {
     if fp == baseline {
         let mine = Set((snap["items"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String })
         let hub = rt.hubNamesSet
-        if mine == hub { return }                      // 名单一致：真没事
+        if mine == hub {
+            rt.ledgerShortSince = 0
+            return                                     // 名单一致：真没事
+        }
         if !hub.isEmpty && mine.isSuperset(of: hub) {
-            ledgerDue = true                           // 我 ⊇ 中枢：补报新增位置（豁免 lastBC）
+            ledgerDue = true                           // 我 ⊋ 中枢：补报新增位置（豁免 lastBC）
+            rt.ledgerShortSince = 0
+        } else if !hub.isEmpty {
+            // 我 ⊂ 中枢：两种可能——iCloud 未到货（等）/ 文件已被删除（中枢死条目）。
+            // 无法即时区分，用时间判：短缺持续 30 分钟（远超 iCloud 同步延迟）→
+            // 判定删除已在全网生效 → 上报全量清理中枢死条目。
+            // （最坏情况误清：某机 iCloud 超 30 分钟才到货 → 它下次拖动会补回自己的位置）
+            if rt.ledgerShortSince == 0 { rt.ledgerShortSince = now }
+            if now - rt.ledgerShortSince > 1800 {
+                ledgerDue = true
+                rt.ledgerShortSince = 0
+                logLine("sync: 名单对账：短缺持续 30 分钟 → 判定中枢含已删文件死条目 → 上报清理（本机 \(mine.count) 项）")
+            }
         }
     }
     if fp == baseline && !ledgerDue { return }         // 没变化也没对账需求：安静
@@ -1747,6 +1779,7 @@ final class SyncRuntime: @unchecked Sendable {
     private var _protectBackoffUntil = 0   // 保护窗被拒后的重报退避（本机时间轴）
     private var _lastLocalFpLogged = ""     // 退避日志去重（只在 fp 变化时记一次）
     private var _hubNamesSet: Set<String> = []  // 最近一次见到的中枢图标名单（名单对账用）
+    private var _ledgerShortSince: Int = 0   // 首次发现「本机名单 ⊂ 中枢名单」的时刻（删除对账计时）
     var lastRemoteApplyAt: Int {
         get { lock.lock(); defer { lock.unlock() }; return _lastRemoteApplyAt }
         set { lock.lock(); _lastRemoteApplyAt = newValue; lock.unlock() }
@@ -1758,6 +1791,10 @@ final class SyncRuntime: @unchecked Sendable {
     var protectBackoffUntil: Int {
         get { lock.lock(); defer { lock.unlock() }; return _protectBackoffUntil }
         set { lock.lock(); _protectBackoffUntil = newValue; lock.unlock() }
+    }
+    var ledgerShortSince: Int {
+        get { lock.lock(); defer { lock.unlock() }; return _ledgerShortSince }
+        set { lock.lock(); _ledgerShortSince = newValue; lock.unlock() }
     }
     var hubNamesSet: Set<String> {
         get { lock.lock(); defer { lock.unlock() }; return _hubNamesSet }
