@@ -1,0 +1,7 @@
+=== sandbox scenario 17 ===
+SBX-S17 | apply 端跨套映射（中枢 C 套 → 本机 A 套）
+SBX-S17 | apply OK matched=10 kept=0 moved=10
+SBX-S17 | 参数随套 EXPECT lod=64(A套) | ACTUAL lod=64 | PASS
+SBX-S17 | 应用后同格重叠数 = 0 | PASS
+SBX-S17 | 越界项数 = 0 | PASS
+SBX-S17 | conf 其余字段保留（visible）| PASS

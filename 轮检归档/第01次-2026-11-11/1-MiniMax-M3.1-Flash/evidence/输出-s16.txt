@@ -1,0 +1,5 @@
+=== sandbox scenario 16 ===
+SBX-S16 | 快照链：自动快照写入 / 保留上限 / 恢复应用
+SBX-S16 | 首次自动快照 EXPECT ≥1 份 | ACTUAL 1 | PASS
+SBX-S16 | 上限 maxAutoSnapshots=10 EXPECT ≤10 | ACTUAL 1 | PASS
+SBX-S16 | 自应用 EXPECT moved=0 | ACTUAL matched=6 kept=0 moved=0 | PASS

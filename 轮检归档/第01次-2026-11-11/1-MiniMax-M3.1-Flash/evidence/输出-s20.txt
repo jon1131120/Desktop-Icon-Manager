@@ -1,0 +1,12 @@
+=== sandbox scenario 20 ===
+SBX-S20 | JSON 合法性预检探针
+SBX-S20 | isValidJSONObject[NaN] = false
+SBX-S20 | isValidJSONObject[+Inf] = false
+SBX-S20 | isValidJSONObject[NSNumber NaN] = false
+SBX-S20 | isValidJSONObject[合法] = true
+SBX-S20 | isValidJSONObject[嵌套合法] = true
+SBX-S20 | saveSyncState(NaN) 前 baseline=fp-KEEP 后 baseline=fp-KEEP
+SBX-S20 | 落盘原文 = {
+  "baselineFingerprint" : "fp-KEEP"
+}
+SBX-S20 | 判定：NaN 被拦截，文件未变（符合预期）

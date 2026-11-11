@@ -1,0 +1,7 @@
+=== sandbox scenario 22 ===
+SBX-S22 | 自动快照文件名粒度（MM-dd_HHmm）→ 同分钟覆盖
+SBX-S22 | 三次自动快照后的文件名集合：
+SBX-S22 |   第1次 → [Studio] 自动 [外置屏] 11-11_晚上1012.json
+SBX-S22 |   第2次 → [Studio] 自动 [外置屏] 11-11_晚上1012.json
+SBX-S22 |   第3次 → [Studio] 自动 [外置屏] 11-11_晚上1012.json
+SBX-S22 | 期望 3 份（内容各异）| ACTUAL 1 份 | ★ 同分钟文件名撞名 → 后写覆盖前写

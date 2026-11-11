@@ -1,0 +1,16 @@
+# R30: 中枢归档：文件权限收紧到 600（与真源 layout.json 一致）
+# 仅修复提案，未改生产文件。应用方式：git apply fix-R30-archive-perm.patch
+--- a/hub/hub-server.py
++++ b/hub/hub-server.py
+@@ -110,6 +110,11 @@
+         k += 1
+     with open(os.path.join(ARCHIVE, name), 'w') as f:
+         json.dump(data, f, ensure_ascii=False, indent=1)
++    # 归档同样含桌面文件名 -> 与真源一致收紧到 600（2026-11-11 轮检 R30）
++    try:
++        os.chmod(os.path.join(ARCHIVE, name), 0o600)
++    except Exception:
++        pass
+     files = sorted(f for f in os.listdir(ARCHIVE) if f.endswith('.json'))
+     for f in files[:-MAX_ARCHIVE]:
+         try:

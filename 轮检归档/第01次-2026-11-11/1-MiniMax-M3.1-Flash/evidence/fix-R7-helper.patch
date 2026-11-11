@@ -1,0 +1,17 @@
+# R7: 屏号自愈辅助函数 pointInsideMain
+--- a/QSpaceLayoutBar/main.swift
++++ b/QSpaceLayoutBar/main.swift
+@@ -879,6 +879,13 @@
+     return out
+ }
+ 
++/// 旧屏号组是否有点落在主屏图标包围盒内（退化场景兜底判据）
++func pointInsideMain(_ b: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int),
++                      _ main: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int)) -> Bool {
++    return b.minX <= main.maxX && b.maxX >= main.minX
++        && b.minY <= main.maxY && b.maxY >= main.minY
++}
++
+ /// 生成网格化快照（v2）：只收目标屏图标（单屏机器：所有图标归一，忽略历史 screen 编号）
+ /// 用写死的 spec 参数换算（不再从坐标反推，消除步长误差）
+ func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {

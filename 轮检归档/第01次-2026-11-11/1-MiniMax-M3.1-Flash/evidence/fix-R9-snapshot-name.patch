@@ -1,0 +1,22 @@
+# R9-snapshot-name: 自动快照：同名加序号防覆盖
+# 仅修复提案，未改生产文件。应用方式：git apply fix-R9-snapshot-name.patch
+--- a/QSpaceLayoutBar/main.swift
++++ b/QSpaceLayoutBar/main.swift
+@@ -297,7 +297,16 @@
+         "showItemBriefInfo": conf["showItemBriefInfo"] ?? true,
+     ]
+     try? FileManager.default.createDirectory(atPath: layoutDir, withIntermediateDirectories: true)
+-    let url = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName).json")
++    var url = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName).json")
++    // 同名防覆盖（2026-11-11 轮检 R9/R23）：文件名只到分钟粒度（MM-dd_HHmm），
++    //   同一分钟内的多次快照（进程重启 / 时钟回拨 / 自动+手动并存）会互相覆盖 ->
++    //   实测 3 次内容各异的自动快照只剩 1 份，历史丢失。加序号防撞。
++    var nameSeq = 1
++    while FileManager.default.fileExists(atPath: url.path) {
++        url = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName)-\(nameSeq).json")
++        nameSeq += 1
++        if nameSeq > 999 { break }
++    }
+     guard JSONSerialization.isValidJSONObject(snapshot) else {
+         logLine("saveLayout: 快照含非法 JSON 类型，未写入（防进程崩溃）")
+         return

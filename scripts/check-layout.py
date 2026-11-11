@@ -9,7 +9,7 @@ grp=Counter()
 for a in conf['itemAttrs']:
     grp[(str(a.get('screen',1)),a.get('screenWidth'),a.get('screenHeight'))]+=1
 sid,w,h=max(grp.items(), key=lambda kv: kv[1])[0]
-key='A' if abs(w-1710)<=40 else ('B' if abs(w-1728)<=40 else 'C')
+key=('A' if abs(w-1710)<=abs(w-1728) else 'B') if (abs(w-1710)<=40 and abs(w-1728)<=40) else ('A' if abs(w-1710)<=40 else ('B' if abs(w-1728)<=40 else 'C'))
 sp=SPECS[key]
 desk=[a for a in conf['itemAttrs'] if str(a.get('screen',1))==sid and str(a.get('name','')).startswith('/Users/jon/Desktop/')]
 fails=[]

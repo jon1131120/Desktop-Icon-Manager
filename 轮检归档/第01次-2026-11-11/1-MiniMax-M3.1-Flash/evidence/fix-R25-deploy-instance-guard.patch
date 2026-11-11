@@ -1,0 +1,18 @@
+# R25-deploy-instance-guard: 部署脚本：实例数 >1 直接判失败（双实例防护）
+# 仅修复提案，未改生产文件。应用方式：git apply fix-R25-deploy-instance-guard.patch
+--- a/scripts/qspace-deploy.sh
++++ b/scripts/qspace-deploy.sh
+@@ -52,6 +52,13 @@
+             launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null || true
+         sleep 2
+         echo -n '实例数: '; ps -Ao comm | grep -c 'QSpaceLayoutBar$'
++        # 实例数强校验（2026-11-11 轮检 R13/R25）：双实例是此前大量怪象的根因，
++        #   旧脚本只打印不断续 -> 部署出 2 个实例也没人知道。这里 >1 直接判失败。
++        local CNT; CNT=$(ps -Ao comm | grep -c 'QSpaceLayoutBar$')
++        if [ "$CNT" -gt 1 ]; then
++            echo "实例数=$CNT (>1) 双实例！请 killall 后重试"
++            exit 1
++        fi
+     else
+         log "远程部署 ${H}"
+         scp -q -r "$APP_SRC" "$H:/tmp/"

@@ -1,0 +1,4 @@
+=== sandbox scenario 7 ===
+SBX-S07 | conf 缺失 → 明确返回 nil 不崩
+SBX-S07 | EXPECT nil | ACTUAL nil | PASS
+SBX-S07 | 缺失时 EXPECT 不上报 | ACTUAL archive增量=0 | PASS

@@ -1,0 +1,7 @@
+=== sandbox scenario 8b ===
+SBX-S08b | 屏号自愈重叠率公式边界（复刻 main.swift:861-865 的判据）
+SBX-S08b | stale y=[60,200]      (完全在主bbox内) | stale bbox x[300,413] y[60,200] overlap=14464 bArea=15820 ratio=0.914 判据=并入 实测=并入 | 公式自洽
+SBX-S08b | stale y=[60,200,346]  (下沿超出主bbox) | stale bbox x[300,526] y[60,346] overlap=28928 bArea=64636 ratio=0.448 判据=不并入 实测=不并入 | 公式自洽
+SBX-S08b | stale y=[60,60,60]    (单行→bbox高度0) | stale bbox x[300,526] y[60,60] overlap=0 bArea=1 ratio=0.000 判据=不并入 实测=不并入 | 公式自洽
+SBX-S08b | stale y=[60,346,632]  (下沿超出更多) | stale bbox x[300,526] y[60,632] overlap=28928 bArea=129272 ratio=0.224 判据=不并入 实测=不并入 | 公式自洽
+SBX-S08b | stale y=[60,120]      (2项同行高度0) | stale bbox x[300,413] y[60,120] overlap=6780 bArea=6780 ratio=1.000 判据=并入 实测=并入 | 公式自洽

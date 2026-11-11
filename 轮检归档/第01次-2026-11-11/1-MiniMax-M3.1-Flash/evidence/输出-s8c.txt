@@ -1,0 +1,3 @@
+=== sandbox scenario 8c ===
+SBX-S08c | 屏号自愈：两组项数相同时「主组」选谁？
+SBX-S08c | ACTUAL s1=40 s2=0（两组都 20 项 → 谁当主？结果应恒定）

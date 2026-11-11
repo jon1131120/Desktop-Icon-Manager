@@ -1,0 +1,20 @@
+# R16-spec-forsize: 套判定：按最近中心选套，修复 MBP 1728 误判 A 的回归
+# 仅修复提案，未改生产文件。应用方式：git apply fix-R16-spec-forsize.patch
+--- a/QSpaceLayoutBar/main.swift
++++ b/QSpaceLayoutBar/main.swift
+@@ -790,8 +790,13 @@
+ func specForSize(_ w: Int, _ h: Int) -> GridSpec? {
+     // 容差匹配：菜单栏/缩放/系统版本会让高度差几十像素，精确相等会漏配并落到兜底误判
+     if w >= 2400 { return SPEC_C }                        // 2560×1440 外接 / Studio 虚拟屏
+-    if abs(w - 1710) <= 40 { return SPEC_A }              // Air 内置
+-    if abs(w - 1728) <= 40 { return SPEC_B }              // MBP 内置
++    // 按「最近中心」选套（2026-11-11 轮检 R16/R26）：旧的先到先得判定让
++    //   A(1710±40=[1670,1750]) 吃掉 B(1728±40=[1688,1768]) 的重叠段 -> MBP 内置 1728 判成 A，
++    //   SPEC_B 仅在 [1751,1768] 可达（实测）。改为比较 |w-1710| 与 |w-1728| 谁更小。
++    let dA = abs(w - 1710), dB = abs(w - 1728)
++    if dA <= 40 && dB <= 40 { return dA <= dB ? SPEC_A : SPEC_B }   // 两套都在容差内 -> 取近的
++    if dA <= 40 { return SPEC_A }
++    if dB <= 40 { return SPEC_B }
+     return nil
+ }
+ 

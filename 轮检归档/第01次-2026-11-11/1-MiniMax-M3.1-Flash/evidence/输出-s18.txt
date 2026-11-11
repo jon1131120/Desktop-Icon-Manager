@@ -1,0 +1,4 @@
+=== sandbox scenario 18 ===
+SBX-S18 | 风暴保护：60 秒内 8 次上报后应暂停
+SBX-S18 | 风暴保护 EXPECT 不上报(增量=0) | ACTUAL 增量=0 | PASS
+SBX-S18 | 网络退避 EXPECT 不上报 | ACTUAL 增量=0 | PASS

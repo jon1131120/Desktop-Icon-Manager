@@ -1,0 +1,8 @@
+=== sandbox scenario 11 ===
+SBX-S11 | specForSize 套判定可达性（生产函数）
+SBX-S11 | w=1512→nil(走 machineTag 兜底)  w=1680→A  w=1700→A  w=1710→A  w=1718→A  w=1728→A  w=1740→A  w=1750→A  w=1751→B  w=1760→B  w=1768→B  w=1769→nil(走 machineTag 兜底)  w=2560→C
+SBX-S11 | SPEC_B 可达宽度区间 = [1751, 1768]（宽度 100）
+SBX-S11 | B 套基本不可达（区间远窄于 ±40 容差预期 80 宽）| FAIL（MBP 1728 宽会落进 A 区间）
+SBX-S11 | leftBase[A] = 1:9,2:9,3:9,4:9,5:4,6:4,7:4,8:0,9:0
+SBX-S11 | leftBase[B] = 1:8,2:8,3:8,4:8,5:4,6:4,7:4,8:0,9:0
+SBX-S11 | leftBase[C] = 1:6,2:6,3:6,4:3,5:3,6:3,7:0,8:0,9:0

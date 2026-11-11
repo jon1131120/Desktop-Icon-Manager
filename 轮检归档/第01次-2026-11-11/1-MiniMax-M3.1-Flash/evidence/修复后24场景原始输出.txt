@@ -1,0 +1,198 @@
+=== SCENARIO 1 ===
+=== sandbox scenario 1 ===
+SBX-S01 | 新增文件对账：中枢 37 / 客户端 38
+SBX-S01 | seed hub 37 → ["accepted": 1, "syncAt": 1794407664]
+SBX-S01 | EXPECT 中枢 38 | ACTUAL 38 | PASS
+
+=== SCENARIO 2 ===
+=== sandbox scenario 2 ===
+SBX-S02 | 删除死条目清理：中枢 38 / 客户端 37
+SBX-S02 | seed hub 38 项 → ["accepted": 1, "syncAt": 1794407664]
+SBX-S02 | 计时 100s 时 EXPECT 中枢仍 38 | ACTUAL 38 | PASS
+SBX-S02 | 计时 1801s 后 EXPECT 中枢 37 | ACTUAL 37 | PASS  (被清理项=old37.txt)
+
+=== SCENARIO 3 ===
+=== sandbox scenario 3 ===
+SBX-S03 | 防震荡：A 报 38(含 X) / B 报 37(无 X) 交替
+SBX-S03 | seed 中枢 37 项（X 已不在）→ ["syncAt": 1794407664, "accepted": 1]
+SBX-S03 | prev 含 X = true | current 含 X = false
+SBX-S03 | 复活场景 EXPECT 中枢仍 37（X 不复活） | ACTUAL 37 | PASS  X=old37.txt
+SBX-S03 | 对照组 prev 非空=true prev 含 X=false
+SBX-S03 | 对照组（prev 无 X=真新增）EXPECT 中枢 38 | ACTUAL 38 | PASS
+
+=== SCENARIO 4 ===
+=== sandbox scenario 4 ===
+SBX-S04 | 快速连续变化：conf 连变 5 次（间隔 <10s 防抖窗口）
+SBX-S04 | seed 中枢基线 10 项 → ["syncAt": 1794407664, "accepted": 1]
+SBX-S04 |   变更1（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 |   变更2（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 |   变更3（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 |   变更4（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 |   变更5（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 | 5 次连变后（窗内）EXPECT 中枢未变（仍 10 项且 0 次新落盘） | ACTUAL 项数=10 archive增量=0 | PASS
+SBX-S04 | 窗开后 EXPECT 中枢 10 项且只有 1 次落盘 | ACTUAL 项数=10 archive增量=1 | PASS
+SBX-S04 | 中枢首项 col=15 row=1（最终版 k=5 → col=15 row=1）| PASS
+
+=== SCENARIO 5 ===
+=== sandbox scenario 5 ===
+SBX-S05 | QSpace 精简回写（conf 只剩 visible+itemAttrs）→ 参数自愈
+SBX-S05 | EXPECT loadConf 补回 lod=96/hSpacing=11 | ACTUAL lod=96 hSpacing=11 | PASS
+SBX-S05 | 无 itemAttrs 时 EXPECT loadConf 非nil + 快照 nil | ACTUAL loadConf=非nil snap=nil | PASS
+SBX-S05 | 无 itemAttrs 时 EXPECT 不上报 | ACTUAL archive增量=0 | PASS
+
+=== SCENARIO 6 ===
+=== sandbox scenario 6 ===
+SBX-S06 | conf 损坏（坏 JSON）→ loadConf 拒绝 + 日志告警 + 不崩
+SBX-S06 | EXPECT loadConf=nil | ACTUAL nil | PASS
+SBX-S06 | EXPECT 日志含告警 | ACTUAL warned=true | PASS
+SBX-S06 | 损坏时 EXPECT 不上报 | ACTUAL archive增量=0 | PASS
+
+=== SCENARIO 7 ===
+=== sandbox scenario 7 ===
+SBX-S07 | conf 缺失 → 明确返回 nil 不崩
+SBX-S07 | EXPECT nil | ACTUAL nil | PASS
+SBX-S07 | 缺失时 EXPECT 不上报 | ACTUAL archive增量=0 | PASS
+
+=== SCENARIO 8 ===
+=== sandbox scenario 8 ===
+SBX-S08 | 屏号失真：itemAttrs 混入 screen=2 的旧屏号项
+SBX-S08 | 主组 bbox = x[120,2154] y[1076,1224]
+SBX-S08 | A[旧组2行在主bbox内] EXPECT 归入 screen1(s2=0) | ACTUAL s1=22 s2=0 | PASS
+SBX-S08 | B[旧组全同一行(bbox高度0)] EXPECT 归入 screen1(s2=0) | ACTUAL s1=23 s2=0 | PASS
+SBX-S08 | C 主组 y 范围 [1076,1224]，旧组下沿 y=1476
+SBX-S08 | C[旧组下沿超出主bbox] EXPECT 归入 screen1(s2=0) | ACTUAL s1=23 s2=0 | PASS
+SBX-S08 | D[真双屏 x 远超主组] EXPECT 不合并(s2=3) | ACTUAL s1=20 s2=3 | PASS
+
+=== SCENARIO 8b ===
+=== sandbox scenario 8b ===
+SBX-S08b | 屏号自愈判据：公式复刻 vs 生产函数 一致性
+SBX-S08b | 旧组2行在主bbox内 | ratio=1.000 degenerate=false inside=true 判据=并入 实测=并入 | 公式自洽
+SBX-S08b | 旧组全同一行(bbox高度0) | ratio=0.000 degenerate=true inside=true 判据=并入 实测=并入 | 公式自洽
+SBX-S08b | 旧组下沿超出主bbox | ratio=0.370 degenerate=false inside=true 判据=并入 实测=并入 | 公式自洽
+SBX-S08b | 旧组下沿超出更多 | ratio=0.185 degenerate=false inside=true 判据=并入 实测=并入 | 公式自洽
+SBX-S08b | 旧组2项同行 | ratio=1.000 degenerate=false inside=true 判据=并入 实测=并入 | 公式自洽
+SBX-S08b | 真双屏(远在右侧) | ratio=0.000 degenerate=false inside=false 判据=不并入 实测=不并入 | 公式自洽
+
+=== SCENARIO 8c ===
+=== sandbox scenario 8c ===
+SBX-S08c | 屏号自愈：两组项数相同时「主组」选谁？
+SBX-S08c | ACTUAL s1=20 s2=20（两组都 20 项 → 谁当主？结果应恒定）
+
+=== SCENARIO 9 ===
+=== sandbox scenario 9 ===
+SBX-S09 | 双写竞争：多写者并发写 conf
+SBX-S09 | 并发写 10x40=400 次 | 读样本=212 完整JSON=212 半截JSON=0 | 最终可解析=true 项数=38 | PASS
+
+=== SCENARIO 10 ===
+=== sandbox scenario 10 ===
+SBX-S10 | 跨实现一致性：生产 mapCell 指纹（供 Python 端比对）
+SBX-S10 | 生产 mapCell 组合数=1116 指纹=b76d4204271296b
+SBX-S10 | 明细已落盘 /tmp/sandbox_minimax/cmpfix_home/mapcell-prod.txt
+
+=== SCENARIO 11 ===
+=== sandbox scenario 11 ===
+SBX-S11 | specForSize 套判定可达性（生产函数）
+SBX-S11 | w=1512→nil(走 machineTag 兜底)  w=1680→A  w=1700→A  w=1710→A  w=1718→A  w=1728→B  w=1740→B  w=1750→B  w=1751→B  w=1760→B  w=1768→B  w=1769→nil(走 machineTag 兜底)  w=2560→C
+SBX-S11 | SPEC_B 可达宽度区间 = [1720, 1768]（宽度 100）
+SBX-S11 | SPEC_B 覆盖 1728=true 可达区间宽=49 | PASS
+SBX-S11 | leftBase[A] = 1:9,2:9,3:9,4:9,5:4,6:4,7:4,8:0,9:0
+SBX-S11 | leftBase[B] = 1:8,2:8,3:8,4:8,5:4,6:4,7:4,8:0,9:0
+SBX-S11 | leftBase[C] = 1:6,2:6,3:6,4:3,5:3,6:3,7:0,8:0,9:0
+
+=== SCENARIO 12 ===
+=== sandbox scenario 12 ===
+SBX-S12 | 保护窗：active 上报 vs 非 active 上报冲突
+SBX-S12 | seed hub active 版本 → ["syncAt": 1794407669, "accepted": 1]
+SBX-S12 | EXPECT 被拒 reason=protected / baseline 不变 / 退避>now | ACTUAL baseline=fp-old-baseline backoff余=605s hub项数=5 | PASS
+SBX-S12 | 用户拖动后 EXPECT 退避被清零 | ACTUAL protectBackoffUntil-now=-1794407674s | PASS
+SBX-S12 | 带 active 标记 EXPECT 被接受(baseline=fp2) | ACTUAL baseline=已变=2d6ae3dc46a1ed24 hubFp==本机fp | PASS
+
+=== SCENARIO 13 ===
+=== sandbox scenario 13 ===
+SBX-S13 | 时钟偏移：客户端钟落后 → clockOffset 补偿后上报成功
+SBX-S13 | seed hub syncAt=now+200 → ["syncAt": 1794407874, "accepted": 1]
+SBX-S13 | 第1轮 EXPECT 记下 clockOffset≈201 | ACTUAL offset=201 | PASS
+SBX-S13 | 第2轮 EXPECT 上报成功(baseline=fp, 中枢 fp=本机 fp) | ACTUAL baseline=9280fd8cc3964785 hubFp=9280fd8cc3964785 项数=5 | PASS
+
+=== SCENARIO 14 ===
+=== sandbox scenario 14 ===
+SBX-S14 | 空布局拦截：items=[] → 客户端拒发
+SBX-S14 | A[conf 无 itemAttrs] EXPECT 快照 nil（不可生成） | ACTUAL nil | PASS
+SBX-S14 | B[只有卷宗无桌面项] EXPECT 快照非nil且 items=0 | ACTUAL snap=非nil items=0 fp=非空 | PASS
+SBX-S14 | EXPECT 客户端拒发（archive 增量=0）| ACTUAL 增量=0 | PASS
+SBX-S14 | EXPECT 日志含「本机布局为空」| ACTUAL PASS
+SBX-S14 | 日志尾部: 2026-11-11 22:34:34: hub: 使用地址 http://127.0.0.1:18890 || 2026-11-11 22:34:34: sync: 本机布局为空（0 个图标），拒绝上报以免清空中枢
+
+=== SCENARIO 15 ===
+=== sandbox scenario 15 ===
+SBX-S15 | overlap 修复：同格重叠 → 行内右推
+SBX-S15 | EXPECT 检出并推开 1 个 | ACTUAL patched=1 | PASS
+SBX-S15 | EXPECT 两项 x 不同 | ACTUAL x0=120 x1=233 | PASS
+SBX-S15 | EXPECT 修后 0 个同格重叠 | ACTUAL dups=0 | PASS
+SBX-S15 | 无重叠 EXPECT nil（不改盘）| ACTUAL patched=-1 | PASS
+
+=== SCENARIO 16 ===
+=== sandbox scenario 16 ===
+SBX-S16 | 快照链：自动快照写入 / 保留上限 / 恢复应用
+SBX-S16 | 首次自动快照 EXPECT ≥1 份 | ACTUAL 1 | PASS
+SBX-S16 | 上限 maxAutoSnapshots=10 EXPECT ≤10 | ACTUAL 10 | PASS
+SBX-S16 | 自应用 EXPECT moved=0 | ACTUAL matched=6 kept=0 moved=0 | PASS
+
+=== SCENARIO 17 ===
+=== sandbox scenario 17 ===
+SBX-S17 | apply 端跨套映射（中枢 C 套 → 本机 A 套）
+SBX-S17 | apply OK matched=10 kept=0 moved=10
+SBX-S17 | 参数随套 EXPECT lod=64(A套) | ACTUAL lod=64 | PASS
+SBX-S17 | 应用后同格重叠数 = 0 | PASS
+SBX-S17 | 越界项数 = 0 | PASS
+SBX-S17 | conf 其余字段保留（visible）| PASS
+
+=== SCENARIO 18 ===
+=== sandbox scenario 18 ===
+SBX-S18 | 风暴保护：60 秒内 8 次上报后应暂停
+SBX-S18 | 风暴保护 EXPECT 不上报(增量=0) | ACTUAL 增量=0 | PASS
+SBX-S18 | 网络退避 EXPECT 不上报 | ACTUAL 增量=0 | PASS
+
+=== SCENARIO 19 ===
+=== sandbox scenario 19 ===
+SBX-S19 | sync-state 原子写 + 损坏恢复
+SBX-S19 | 往返 EXPECT clockOffset=7 nested 保留 | ACTUAL off=7 nested=true | PASS
+SBX-S19 | 损坏 EXPECT 返回空字典不崩 | ACTUAL count=0 | PASS
+SBX-S19 | NaN 写入 EXPECT 被拦截(文件保持不变) | ACTUAL baseline=fp-CLEAN | PASS(未被覆盖)
+SBX-S19 | 临时文件残留检查 .tmp 存在=false（存在也无妨：写完即 rename）
+
+=== SCENARIO 20 ===
+=== sandbox scenario 20 ===
+SBX-S20 | JSON 合法性预检探针
+SBX-S20 | isValidJSONObject[NaN] = false
+SBX-S20 | isValidJSONObject[+Inf] = false
+SBX-S20 | isValidJSONObject[NSNumber NaN] = false
+SBX-S20 | isValidJSONObject[合法] = true
+SBX-S20 | isValidJSONObject[嵌套合法] = true
+SBX-S20 | saveSyncState(NaN) 前 baseline=fp-KEEP 后 baseline=fp-KEEP
+SBX-S20 | 落盘原文 = {
+  "baselineFingerprint" : "fp-KEEP"
+}
+SBX-S20 | 判定：NaN 被拦截，文件未变（符合预期）
+
+=== SCENARIO 21 ===
+=== sandbox scenario 21 ===
+SBX-S21 | 累积漂移：多轮 A→B→A 往返后位置是否稳定
+SBX-S21 | 初始 A 套 x = [80, 159, 238, 317, 396, 475, 554, 633, 712, 791, 870, 949]
+SBX-S21 | 第1轮 应用后 x = [80, 159, 238, 317, 396, 475, 554, 633, 712, 791, 870, 949] | 与初始最大偏差 = 0px
+SBX-S21 | 第2轮 应用后 x = [80, 159, 238, 317, 396, 475, 554, 633, 712, 791, 870, 949] | 与初始最大偏差 = 0px
+SBX-S21 | 第3轮 应用后 x = [80, 159, 238, 317, 396, 475, 554, 633, 712, 791, 870, 949] | 与初始最大偏差 = 0px
+SBX-S21 | 第4轮 应用后 x = [80, 159, 238, 317, 396, 475, 554, 633, 712, 791, 870, 949] | 与初始最大偏差 = 0px
+SBX-S21 | 第5轮 应用后 x = [80, 159, 238, 317, 396, 475, 554, 633, 712, 791, 870, 949] | 与初始最大偏差 = 0px
+SBX-S21 | 第6轮 应用后 x = [80, 159, 238, 317, 396, 475, 554, 633, 712, 791, 870, 949] | 与初始最大偏差 = 0px
+SBX-S21 | 偏差序列 = [0, 0, 0, 0, 0, 0] | 单调不减(累积漂移)=true | 末轮偏差=0px
+SBX-S21 | 判定：无累积漂移（稳定）
+
+=== SCENARIO 22 ===
+=== sandbox scenario 22 ===
+SBX-S22 | 自动快照文件名粒度（MM-dd_HHmm）→ 同分钟覆盖
+SBX-S22 | 三次自动快照后的文件名集合：
+SBX-S22 |   第1次 → [Studio] 自动 [外置屏] 11-11_晚上1034.json
+SBX-S22 |   第2次 → [Studio] 自动 [外置屏] 11-11_晚上1034-1.json,[Studio] 自动 [外置屏] 11-11_晚上1034.json
+SBX-S22 |   第3次 → [Studio] 自动 [外置屏] 11-11_晚上1034-1.json,[Studio] 自动 [外置屏] 11-11_晚上1034-2.json,[Studio] 自动 [外置屏] 11-11_晚上1034.json
+SBX-S22 | 期望 3 份（内容各异）| ACTUAL 3 份 | PASS

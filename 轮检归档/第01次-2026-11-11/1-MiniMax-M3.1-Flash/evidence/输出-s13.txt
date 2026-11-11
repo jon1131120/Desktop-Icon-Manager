@@ -1,0 +1,5 @@
+=== sandbox scenario 13 ===
+SBX-S13 | 时钟偏移：客户端钟落后 → clockOffset 补偿后上报成功
+SBX-S13 | seed hub syncAt=now+200 → ["syncAt": 1794405761, "accepted": 1]
+SBX-S13 | 第1轮 EXPECT 记下 clockOffset≈201 | ACTUAL offset=201 | PASS
+SBX-S13 | 第2轮 EXPECT 上报成功(baseline=fp, 中枢 fp=本机 fp) | ACTUAL baseline=844235b080e349ea hubFp=844235b080e349ea 项数=5 | PASS

@@ -1,0 +1,13 @@
+# R24-rollback-local: 回滚 --local：sourceMachine 归一到白名单，标记移到独立字段
+# 仅修复提案，未改生产文件。应用方式：git apply fix-R24-rollback-local.patch
+--- a/scripts/qspace-rollback.sh
++++ b/scripts/qspace-rollback.sh
+@@ -124,7 +124,7 @@
+ t="|".join(f"{i['name']}:{i['col']},{i['row']}" for i in items)
+ hv=0xcbf29ce484222325
+ for ch in t.encode(): hv^=ch; hv=(hv*0x100000001b3)&0xFFFFFFFFFFFFFFFF
+-payload={"sourceMachine":"local-snapshot","specKey":key,"syncAt":int(time.time()),
++payload={"sourceMachine":"MBP","localSnapshot":True,"specKey":key,"syncAt":int(time.time()),
+          "items":items,"layoutFingerprint":format(hv,'016x'),
+          "grid":{"cols":cols,"rows":rows,"x0":x0,"y0":y0,"colStep":cs,"rowStep":rs}}
+ req=urllib.request.Request(os.environ["API"]+"/layout",data=json.dumps(payload).encode(),

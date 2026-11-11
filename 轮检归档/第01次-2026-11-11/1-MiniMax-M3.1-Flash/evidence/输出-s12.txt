@@ -1,0 +1,6 @@
+=== sandbox scenario 12 ===
+SBX-S12 | 保护窗：active 上报 vs 非 active 上报冲突
+SBX-S12 | seed hub active 版本 → ["syncAt": 1794405618, "accepted": 1]
+SBX-S12 | EXPECT 被拒 reason=protected / baseline 不变 / 退避>now | ACTUAL baseline=fp-old-baseline backoff余=605s hub项数=5 | PASS
+SBX-S12 | 用户拖动后 EXPECT 退避被清零 | ACTUAL protectBackoffUntil-now=-1794405623s | PASS
+SBX-S12 | 带 active 标记 EXPECT 被接受(baseline=fp2) | ACTUAL baseline=已变=32abc7abf8559a8f hubFp==本机fp | PASS

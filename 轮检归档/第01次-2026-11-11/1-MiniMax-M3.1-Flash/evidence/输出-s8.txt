@@ -1,0 +1,7 @@
+=== sandbox scenario 8 ===
+SBX-S08 | 屏号失真：itemAttrs 混入 screen=2 的旧屏号项
+SBX-S08 | A[旧组跨2行 y=60,200,346 在主包围盒内] EXPECT 归入 screen1(s2=0) | ACTUAL s1=20 s2=3 | FAIL
+SBX-S08 | B[旧组全同一行 y=60 唯一] EXPECT 归入 screen1(s2=0) | ACTUAL s1=20 s2=3 | FAIL
+SBX-S08 | C[旧组全同一行 y=300] EXPECT 归入 screen1(s2=0) | ACTUAL s1=20 s2=3 | FAIL
+SBX-S08 | D[真双屏 x=20000+] EXPECT 不合并(s2=3) | ACTUAL s1=20 s2=3 | PASS
+SBX-S08 | E[旧组 y=60,200,60 重复行] EXPECT 归入 screen1(s2=0) | ACTUAL s1=23 s2=0 | PASS

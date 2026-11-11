@@ -10,7 +10,10 @@ import threading, os, time, datetime, logging, ipaddress, hmac, secrets
 from logging.handlers import RotatingFileHandler
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-HUB = os.path.expanduser('~/qspace-hub')
+# 数据目录可环境变量隔离（2026-11-11 轮检 R20 深挖实锤：沙箱实例端口隔离但数据
+# 路径仍指生产 ~/qspace-hub，test-hub 的写入用例全部打进生产 layout.json → 生产
+# 中枢被污染成 1 项 t.txt。沙箱必须 QSPACE_HUB_DIR=/tmp/xxx 起实例才是真隔离。）
+HUB = os.path.expanduser(os.environ.get('QSPACE_HUB_DIR', '~/qspace-hub'))
 LATEST = os.path.join(HUB, 'layout.json')
 ARCHIVE = os.path.join(HUB, 'archive')
 PORT = 18878
@@ -110,6 +113,11 @@ def save_latest(data):
         k += 1
     with open(os.path.join(ARCHIVE, name), 'w') as f:
         json.dump(data, f, ensure_ascii=False, indent=1)
+    # 归档同样含桌面文件名 -> 与真源一致收紧到 600（2026-11-11 轮检 R30）
+    try:
+        os.chmod(os.path.join(ARCHIVE, name), 0o600)
+    except Exception:
+        pass
     files = sorted(f for f in os.listdir(ARCHIVE) if f.endswith('.json'))
     for f in files[:-MAX_ARCHIVE]:
         try:

@@ -1,0 +1,6 @@
+=== sandbox scenario 19 ===
+SBX-S19 | sync-state 原子写 + 损坏恢复
+SBX-S19 | 往返 EXPECT clockOffset=7 nested 保留 | ACTUAL off=7 nested=true | PASS
+SBX-S19 | 损坏 EXPECT 返回空字典不崩 | ACTUAL count=0 | PASS
+SBX-S19 | NaN 写入 EXPECT 被拦截(文件保持不变) | ACTUAL baseline=fp-CLEAN | PASS(未被覆盖)
+SBX-S19 | 临时文件残留检查 .tmp 存在=false（存在也无妨：写完即 rename）

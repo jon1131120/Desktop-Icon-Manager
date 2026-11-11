@@ -1,0 +1,3 @@
+=== sandbox scenario 9 ===
+SBX-S09 | 双写竞争：多写者并发写 conf
+SBX-S09 | 并发写 10x40=400 次 | 读样本=190 完整JSON=190 半截JSON=0 | 最终可解析=true 项数=44 | PASS

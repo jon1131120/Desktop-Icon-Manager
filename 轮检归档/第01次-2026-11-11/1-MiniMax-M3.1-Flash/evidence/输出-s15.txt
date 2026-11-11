@@ -1,0 +1,6 @@
+=== sandbox scenario 15 ===
+SBX-S15 | overlap 修复：同格重叠 → 行内右推
+SBX-S15 | EXPECT 检出并推开 1 个 | ACTUAL patched=1 | PASS
+SBX-S15 | EXPECT 两项 x 不同 | ACTUAL x0=120 x1=233 | PASS
+SBX-S15 | EXPECT 修后 0 个同格重叠 | ACTUAL dups=0 | PASS
+SBX-S15 | 无重叠 EXPECT nil（不改盘）| ACTUAL patched=-1 | PASS

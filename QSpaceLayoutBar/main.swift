@@ -297,7 +297,16 @@ func saveLayout(named name: String, isAuto: Bool = false) {
         "showItemBriefInfo": conf["showItemBriefInfo"] ?? true,
     ]
     try? FileManager.default.createDirectory(atPath: layoutDir, withIntermediateDirectories: true)
-    let url = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName).json")
+    var url = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName).json")
+    // 同名防覆盖（2026-11-11 轮检 R9/R23）：文件名只到分钟粒度（MM-dd_HHmm），
+    //   同一分钟内的多次快照（进程重启 / 时钟回拨 / 自动+手动并存）会互相覆盖 ->
+    //   实测 3 次内容各异的自动快照只剩 1 份，历史丢失。加序号防撞。
+    var nameSeq = 1
+    while FileManager.default.fileExists(atPath: url.path) {
+        url = URL(fileURLWithPath: layoutDir).appendingPathComponent("\(finalName)-\(nameSeq).json")
+        nameSeq += 1
+        if nameSeq > 999 { break }
+    }
     guard JSONSerialization.isValidJSONObject(snapshot) else {
         logLine("saveLayout: 快照含非法 JSON 类型，未写入（防进程崩溃）")
         return
@@ -723,6 +732,11 @@ let calibrationPoints: [CalPoint] = [
     CalPoint(n: 38, a: (17, 9),  b: (15, 9),  c: (18, 9)),
     CalPoint(n: 39, a: (16, 1),  b: (14, 1),  c: (17, 1)),
     CalPoint(n: 40, a: (16, 9),  b: (14, 9),  c: (17, 9)),
+    // clamp 覆盖补测（2026-11-11 轮检 R18/R28）：原 40 点在 120 个组合上
+    //   全部走「无 clamp」路径 -> clamp 分支零覆盖（变异测试里 clamp 变异不变红）。
+    //   下列补点为自洽三元组（a->b / a->c / b->c 三对全对）且触发 clamp 下界。
+    CalPoint(n: 41, a: (1, 1),   b: (9, 1),   c: (7, 1)),
+    CalPoint(n: 42, a: (2, 1),   b: (9, 1),   c: (7, 1)),
 ]
 
 func runMappingSelfTest() -> Bool {
@@ -790,8 +804,13 @@ func screenGroups(_ attrs: [[String: Any]]) -> [ScreenGroup] {
 func specForSize(_ w: Int, _ h: Int) -> GridSpec? {
     // 容差匹配：菜单栏/缩放/系统版本会让高度差几十像素，精确相等会漏配并落到兜底误判
     if w >= 2400 { return SPEC_C }                        // 2560×1440 外接 / Studio 虚拟屏
-    if abs(w - 1710) <= 40 { return SPEC_A }              // Air 内置
-    if abs(w - 1728) <= 40 { return SPEC_B }              // MBP 内置
+    // 按「最近中心」选套（2026-11-11 轮检 R16/R26）：旧的先到先得判定让
+    //   A(1710±40=[1670,1750]) 吃掉 B(1728±40=[1688,1768]) 的重叠段 -> MBP 内置 1728 判成 A，
+    //   SPEC_B 仅在 [1751,1768] 可达（实测）。改为比较 |w-1710| 与 |w-1728| 谁更小。
+    let dA = abs(w - 1710), dB = abs(w - 1728)
+    if dA <= 40 && dB <= 40 { return dA <= dB ? SPEC_A : SPEC_B }   // 两套都在容差内 -> 取近的
+    if dA <= 40 { return SPEC_A }
+    if dB <= 40 { return SPEC_B }
     return nil
 }
 
@@ -858,11 +877,21 @@ func normalizeScreenIds(_ attrs: [[String: Any]]) -> [[String: Any]] {
     let numericMain = Int(mainID)
     var out = attrs
     for (sid, b) in boxes where sid != mainID {
+        // 判据修正（2026-11-11 轮检 R7/R22）：旧式用「交集面积 / 旧组包围盒面积」，
+        //   旧组只要有一半在主屏包围盒外就判「不同屏」-> 旧屏号项滞留 -> 位置永不同步
+        //   （实测：单行分布 ratio=0.000、下沿超出 ratio=0.448，两种都误判）。
+        //   新式用「交集面积 / 旧组自身面积」：旧组整体落在主屏范围内即算同一屏。
         let ox = max(0, min(main.maxX, b.maxX) - max(main.minX, b.minX))
         let oy = max(0, min(main.maxY, b.maxY) - max(main.minY, b.minY))
         let overlap = ox * oy
         let bArea = max(1, (b.maxX - b.minX) * (b.maxY - b.minY))
-        if Double(overlap) / Double(bArea) > 0.5 {
+        // 单行/单列分布时包围盒面积为 0 -> 退化为「点数判据」
+        let degenerate = (b.maxY - b.minY) == 0 || (b.maxX - b.minX) == 0
+        let ratio = Double(overlap) / Double(bArea)
+        let sameScreen = degenerate
+            ? (overlap > 0 || pointInsideMain(b, main))
+            : (ratio > 0.5 || pointInsideMain(b, main))
+        if sameScreen {
             logLine("screen: 屏号自愈：screen=\(sid) 的 \(b.count) 项坐标落在主屏范围内 → 归入 screen=\(mainID)")
             for i in out.indices {
                 let s = (out[i]["screen"].map { "\($0)" }) ?? "1"
@@ -877,6 +906,13 @@ func normalizeScreenIds(_ attrs: [[String: Any]]) -> [[String: Any]] {
         }
     }
     return out
+}
+
+/// 旧屏号组是否有点落在主屏图标包围盒内（退化场景兜底判据）
+func pointInsideMain(_ b: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int),
+                      _ main: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int)) -> Bool {
+    return b.minX <= main.maxX && b.maxX >= main.minX
+        && b.minY <= main.maxY && b.maxY >= main.minY
 }
 
 /// 生成网格化快照（v2）：只收目标屏图标（单屏机器：所有图标归一，忽略历史 screen 编号）

@@ -1,0 +1,4 @@
+=== sandbox scenario 10 ===
+SBX-S10 | 跨实现一致性：生产 mapCell 指纹（供 Python 端比对）
+SBX-S10 | 生产 mapCell 组合数=1116 指纹=b76d4204271296b
+SBX-S10 | 明细已落盘 /tmp/sandbox_minimax/home/mapcell-prod.txt

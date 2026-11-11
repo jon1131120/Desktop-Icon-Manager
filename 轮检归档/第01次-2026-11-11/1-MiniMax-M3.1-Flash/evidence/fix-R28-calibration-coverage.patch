@@ -1,0 +1,16 @@
+# R28: 40 点标定：补 2 个触发 clamp 下界的自洽标定点，消除 clamp 分支零覆盖
+# 仅修复提案，未改生产文件。应用方式：git apply fix-R28-calibration-coverage.patch
+--- a/QSpaceLayoutBar/main.swift
++++ b/QSpaceLayoutBar/main.swift
+@@ -723,6 +723,11 @@
+     CalPoint(n: 38, a: (17, 9),  b: (15, 9),  c: (18, 9)),
+     CalPoint(n: 39, a: (16, 1),  b: (14, 1),  c: (17, 1)),
+     CalPoint(n: 40, a: (16, 9),  b: (14, 9),  c: (17, 9)),
++    // clamp 覆盖补测（2026-11-11 轮检 R18/R28）：原 40 点在 120 个组合上
++    //   全部走「无 clamp」路径 -> clamp 分支零覆盖（变异测试里 clamp 变异不变红）。
++    //   下列补点为自洽三元组（a->b / a->c / b->c 三对全对）且触发 clamp 下界。
++    CalPoint(n: 41, a: (1, 1),   b: (9, 1),   c: (7, 1)),
++    CalPoint(n: 42, a: (2, 1),   b: (9, 1),   c: (7, 1)),
+ ]
+ 
+ func runMappingSelfTest() -> Bool {

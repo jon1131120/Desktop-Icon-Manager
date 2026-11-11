@@ -1,0 +1,5 @@
+=== sandbox scenario 6 ===
+SBX-S06 | conf 损坏（坏 JSON）→ loadConf 拒绝 + 日志告警 + 不崩
+SBX-S06 | EXPECT loadConf=nil | ACTUAL nil | PASS
+SBX-S06 | EXPECT 日志含告警 | ACTUAL warned=true | PASS
+SBX-S06 | 损坏时 EXPECT 不上报 | ACTUAL archive增量=0 | PASS

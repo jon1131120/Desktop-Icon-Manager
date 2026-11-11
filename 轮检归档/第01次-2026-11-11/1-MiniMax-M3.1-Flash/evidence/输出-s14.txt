@@ -1,0 +1,7 @@
+=== sandbox scenario 14 ===
+SBX-S14 | 空布局拦截：items=[] → 客户端拒发
+SBX-S14 | A[conf 无 itemAttrs] EXPECT 快照 nil（不可生成） | ACTUAL nil | PASS
+SBX-S14 | B[只有卷宗无桌面项] EXPECT 快照非nil且 items=0 | ACTUAL snap=非nil items=0 fp=非空 | PASS
+SBX-S14 | EXPECT 客户端拒发（archive 增量=0）| ACTUAL 增量=0 | PASS
+SBX-S14 | EXPECT 日志含「本机布局为空」| ACTUAL PASS
+SBX-S14 | 日志尾部: 2026-11-11 22:00:05: hub: 使用地址 http://127.0.0.1:18890 || 2026-11-11 22:00:05: sync: 本机布局为空（0 个图标），拒绝上报以免清空中枢

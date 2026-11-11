@@ -1,0 +1,5 @@
+=== sandbox scenario 5 ===
+SBX-S05 | QSpace 精简回写（conf 只剩 visible+itemAttrs）→ 参数自愈
+SBX-S05 | EXPECT loadConf 补回 lod=96/hSpacing=11 | ACTUAL lod=96 hSpacing=11 | PASS
+SBX-S05 | 无 itemAttrs 时 EXPECT loadConf 非nil + 快照 nil | ACTUAL loadConf=非nil snap=nil | PASS
+SBX-S05 | 无 itemAttrs 时 EXPECT 不上报 | ACTUAL archive增量=0 | PASS

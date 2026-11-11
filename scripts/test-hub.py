@@ -30,7 +30,25 @@ def get(path="/layout", token=TOKEN):
         return {"HTTP": e.code, "body": e.read().decode()[:100]}
 
 def reset():
-    """每个用例前清空中枢状态，避免用例间互相干扰（保护窗会延续）"""
+    """每个用例前清空中枢状态，避免用例间互相干扰（保护窗会延续）
+
+    生产 hub 没有 /reset 端点（2026-11-11 轮检 R20/R29 实测：GET/POST 只认
+       /layout 与 /status，未知路径 404）-> 旧实现的 POST /reset 静默失败，
+       17 项契约测试实际跑在脏状态上（保护窗延续到后续用例）。
+       改为直接删除沙箱中枢的 layout.json（真跑清场）。
+    """
+    import os, glob
+    home = os.environ.get("SANDBOX_HOME", "")
+    if home:
+        for f in glob.glob(os.path.join(home, "layout.json")):
+            try: os.remove(f)
+            except OSError: pass
+        arch = os.path.join(home, "archive")
+        if os.path.isdir(arch):
+            for f in glob.glob(os.path.join(arch, "*.json")):
+                try: os.remove(f)
+                except OSError: pass
+        return
     req = urllib.request.Request(BASE + "/reset", data=b"", headers={"X-Hub-Token": TOKEN}, method="POST")
     try:
         urllib.request.urlopen(req, timeout=5).read()

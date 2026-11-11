@@ -1,0 +1,11 @@
+=== sandbox scenario 4 ===
+SBX-S04 | 快速连续变化：conf 连变 5 次（间隔 <10s 防抖窗口）
+SBX-S04 | seed 中枢基线 10 项 → ["syncAt": 1794405430, "accepted": 1]
+SBX-S04 |   变更1（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 |   变更2（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 |   变更3（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 |   变更4（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 |   变更5（窗内）中枢项数=10 archive增量=0 防抖距今=0s
+SBX-S04 | 5 次连变后（窗内）EXPECT 中枢未变（仍 10 项且 0 次新落盘） | ACTUAL 项数=10 archive增量=0 | PASS
+SBX-S04 | 窗开后 EXPECT 中枢 10 项且只有 1 次落盘 | ACTUAL 项数=10 archive增量=1 | PASS
+SBX-S04 | 中枢首项 col=15 row=1（最终版 k=5 → col=15 row=1）| PASS

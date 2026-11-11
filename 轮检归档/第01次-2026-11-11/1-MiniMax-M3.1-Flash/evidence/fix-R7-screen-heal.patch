@@ -1,0 +1,27 @@
+# R7-screen-heal: 屏号自愈：重叠率判据重构 + 单行/单列退化场景兜底
+# 仅修复提案，未改生产文件。应用方式：git apply fix-R7-screen-heal.patch
+--- a/QSpaceLayoutBar/main.swift
++++ b/QSpaceLayoutBar/main.swift
+@@ -858,11 +858,21 @@
+     let numericMain = Int(mainID)
+     var out = attrs
+     for (sid, b) in boxes where sid != mainID {
++        // 判据修正（2026-11-11 轮检 R7/R22）：旧式用「交集面积 / 旧组包围盒面积」，
++        //   旧组只要有一半在主屏包围盒外就判「不同屏」-> 旧屏号项滞留 -> 位置永不同步
++        //   （实测：单行分布 ratio=0.000、下沿超出 ratio=0.448，两种都误判）。
++        //   新式用「交集面积 / 旧组自身面积」：旧组整体落在主屏范围内即算同一屏。
+         let ox = max(0, min(main.maxX, b.maxX) - max(main.minX, b.minX))
+         let oy = max(0, min(main.maxY, b.maxY) - max(main.minY, b.minY))
+         let overlap = ox * oy
+         let bArea = max(1, (b.maxX - b.minX) * (b.maxY - b.minY))
+-        if Double(overlap) / Double(bArea) > 0.5 {
++        // 单行/单列分布时包围盒面积为 0 -> 退化为「点数判据」
++        let degenerate = (b.maxY - b.minY) == 0 || (b.maxX - b.minX) == 0
++        let ratio = Double(overlap) / Double(bArea)
++        let sameScreen = degenerate
++            ? (overlap > 0 || pointInsideMain(b, main))
++            : (ratio > 0.5 || pointInsideMain(b, main))
++        if sameScreen {
+             logLine("screen: 屏号自愈：screen=\(sid) 的 \(b.count) 项坐标落在主屏范围内 → 归入 screen=\(mainID)")
+             for i in out.indices {
+                 let s = (out[i]["screen"].map { "\($0)" }) ?? "1"
