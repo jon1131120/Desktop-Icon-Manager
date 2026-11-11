@@ -315,11 +315,6 @@ func saveLayout(named name: String, isAuto: Bool = false) {
 /// 计算两组图标属性的差异率（0.0~1.0）：位置变化 + 新增 + 删除，除以总数
 
 /// 时光机监测：三规则 + 防冗余，决定是否自动存一条新快照
-func monitorLayoutChanges() {
-    // 已废弃：自动存档属旧「分电脑快照」体系，改为只在手动保存时存档
-    return
-}
-
 func restoreLayout(at url: URL, restart: Bool = true) {
     guard let snapData = FileManager.default.contents(atPath: url.path),
           let snap = try? JSONSerialization.jsonObject(with: snapData) as? [String: Any],
@@ -389,19 +384,6 @@ func restoreLayout(at url: URL, restart: Bool = true) {
     }
 }
 
-func autoSwitchIfNeeded() {
-    // 已废弃：分电脑快照自动切换已由「中枢统一布局 + 屏幕切套」取代
-    return
-}
-
-
-// MARK: - 自动快照（时光机）：布局变化时自动留历史，供回滚
-
-/// 两条自动快照的最小间隔（避免连续拖动产生大量快照）
-let minMinutesBetweenAutoSnapshots: TimeInterval = 10 * 60
-var lastAutoSnapshotAt: TimeInterval = 0
-
-
 /// 真正的「布局内容」指纹：图标名 + 坐标 + 屏幕 的稳定摘要。
 /// ⚠️ 别用 currentFingerprint() —— 那个返回的是屏幕尺寸，布局变了它不变。
 func layoutContentFingerprint() -> String {
@@ -417,6 +399,12 @@ func layoutContentFingerprint() -> String {
     // 拿它做「布局是否变化」判据 → 重启后必然误判为"变了" → 白白多存快照。
     return fnv1a(parts.joined(separator: ";"))
 }
+
+/// 两条自动快照的最小间隔（避免连续拖动产生大量快照）
+var lastAutoSnapshotAt: TimeInterval = 0
+let minMinutesBetweenAutoSnapshots: TimeInterval = 10 * 60
+
+// MARK: - 自动快照（时光机）：布局变化时自动留历史，供回滚
 
 /// 自动快照：本机布局指纹变化且距上次 ≥10 分钟才存一份。
 /// 只清本机前缀的旧自动快照，保留 maxAutoSnapshots 份。
@@ -540,13 +528,6 @@ func microNudge(conf: [String: Any]) {
 }
 
 // MARK: - 合盖/开盖绑定应用
-
-func applyBoundLayout(kind: String, restart: Bool) {
-    // 已废弃：合盖/开盖绑定快照已由「自动识别当前套(A/B/C)」取代
-    return
-}
-
-// MARK: - 开机自启（launchd agent，不依赖签名身份）
 
 func loginItemEnabled() -> Bool {
     // 双重验证：plist 存在 + launchctl 真的在册（防止状态不同步导致开关反转）
@@ -932,6 +913,17 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
         let relName = fullName.hasPrefix(desktopRootPath) ? String(fullName.dropFirst(desktopRootPath.count)) : fullName
         guard isDesktopItem(it), (singleScreen || sid == ctx.screen.screenId),
               let (c, r) = byName[relName] ?? byName[name] ?? byName[fullName] else {
+            // ⭐ kept 项（本机已有/无法匹配的图标）占的格必须登记进 used：
+            //   否则映射落点撞上 kept 项时不避让 → 写盘后同格重叠 → verify 报警
+            //   → overlap 修复连锁推挤（实测一次推挤 5 个图标 = 用户可见「错乱」）。
+            //   卷宗等非桌面项在桌面同样占视觉位置，一并登记。
+            let kx = (it["x"] as? NSNumber)?.intValue ?? -1
+            let ky = (it["y"] as? NSNumber)?.intValue ?? -1
+            if kx >= 0 && ky >= 0 {
+                let kc = max(1, min(dst.cols, safeInt((Double(kx) - dst.x0) / dst.colStep, fallback: -1) + 1))
+                let kr = max(1, min(dst.rows, safeInt((Double(ky) - dst.y0) / dst.rowStep, fallback: -1) + 1))
+                used.insert("\(kc),\(kr)")
+            }
             out.append(ni)
             kept += 1
             continue
@@ -1331,8 +1323,33 @@ func broadcastIfNeeded() {
     let baseline = st["baselineFingerprint"] as? String ?? ""
     let lastBC = st["lastBroadcastFingerprint"] as? String ?? ""
 
-    if fp == baseline { return }
-    if fp == lastBC { return }
+    // ⭐ 名单对账（2026-11-11 P0）：iCloud 新增文件的落位会被「启动基线化」——
+    //   新文件在启动前已落位 → fp==baseline → 永不上报 → 位置永远不进中枢，
+    //   三台各自为政（实测 MBP48/Air43/Studio34 分叉，新增图标位置三台全不同）。
+    //   安全规则：
+    //   · 本机 ⊇ 中枢（我比中枢多）：上报，把新增位置广播给全网
+    //   · 本机 ⊂ 中枢（我比中枢少，iCloud 未到货）：绝不覆盖（会把别机图标条目删掉）
+    //   · hub 名单还没见过（空）：等首轮拉取设置对照面，绝不盲报
+    //     （2026-11-11 实测：三台同启全报 → Studio 34 项赢了 → 中枢丢 9 条）
+    //   ⭐ 对账必须豁免 lastBC 短路：lastBC 只证明「我报过这个 fp」，
+    //     不能证明「中枢还是我的版本」——中枢可能已被别的机器覆盖
+    //     （实测：Air 19:09 报过 43 项 → 19:36 Studio 对账覆盖成 34 项 →
+    //      Air 补报被 lastBC 挡死 → 中枢缺 9 条永久无法自愈）
+    var ledgerDue = false
+    if fp == baseline {
+        let mine = Set((snap["items"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String })
+        let hub = rt.hubNamesSet
+        if mine == hub { return }                      // 名单一致：真没事
+        if !hub.isEmpty && mine.isSuperset(of: hub) {
+            ledgerDue = true                           // 我 ⊇ 中枢：补报新增位置（豁免 lastBC）
+        }
+    }
+    if fp == baseline && !ledgerDue { return }         // 没变化也没对账需求：安静
+    if fp == lastBC && !ledgerDue { return }           // 报过且无对账需求：安静
+    if ledgerDue {
+        let hub = rt.hubNamesSet
+        logLine("sync: 名单对账：本机 \(rt.lastSeenItems.count) 项 vs 中枢 \(hub.count) 项 → 补报新增图标位置（豁免 lastBC）")
+    }
     // 保护窗退避中：对方在操作，等窗开后自动重报（baseline 未动，改动不会丢）
     if now < rt.protectBackoffUntil {
         if rt.lastSeenFp != rt.lastLocalFpLogged {   // 只在 fp 变化时记一次，不刷屏
@@ -1506,6 +1523,8 @@ func applyRemoteIfNewer(_ remote: [String: Any]) {
           let fp = remote["layoutFingerprint"] as? String,
           let items = remote["items"] as? [[String: Any]], !items.isEmpty else { return }
     let now = Int(Date().timeIntervalSince1970)
+    // ⭐ 记录中枢最新名单（拉取公共路径，无论是否应用都更新）——名单对账的对照面
+    rt.hubNamesSet = Set(items.compactMap { $0["name"] as? String })
     // 本机刚拖完（防抖期内）且中枢版本与本地不同 → 先不应用，等本地上报完
     // 否则会把用户刚拖的图标挪回旧位置（实测 moved=2 把刚拖的 2 个图标弹回去）
     if !forceApplyOnce && now - rt.lastLocalChangeAt < 10 {
@@ -1676,6 +1695,7 @@ final class SyncRuntime: @unchecked Sendable {
     private var _lastSeenItems: [String: (Int, Int)] = [:]  // 上一轮 items 映射：区分「拖动」与「文件增删」
     private var _protectBackoffUntil = 0   // 保护窗被拒后的重报退避（本机时间轴）
     private var _lastLocalFpLogged = ""     // 退避日志去重（只在 fp 变化时记一次）
+    private var _hubNamesSet: Set<String> = []  // 最近一次见到的中枢图标名单（名单对账用）
     var lastRemoteApplyAt: Int {
         get { lock.lock(); defer { lock.unlock() }; return _lastRemoteApplyAt }
         set { lock.lock(); _lastRemoteApplyAt = newValue; lock.unlock() }
@@ -1687,6 +1707,10 @@ final class SyncRuntime: @unchecked Sendable {
     var protectBackoffUntil: Int {
         get { lock.lock(); defer { lock.unlock() }; return _protectBackoffUntil }
         set { lock.lock(); _protectBackoffUntil = newValue; lock.unlock() }
+    }
+    var hubNamesSet: Set<String> {
+        get { lock.lock(); defer { lock.unlock() }; return _hubNamesSet }
+        set { lock.lock(); _hubNamesSet = newValue; lock.unlock() }
     }
     var lastLocalFpLogged: String {
         get { lock.lock(); defer { lock.unlock() }; return _lastLocalFpLogged }
