@@ -823,11 +823,57 @@ func isDesktopItem(_ it: [String: Any]) -> Bool {
 }
 
 
+/// ⭐ screen 字段自愈（2026-11-11）：合盖后 macOS 只有一个活跃屏，但 conf 里残留
+/// 旧屏号（实测 MBP 合盖后 11 项还挂着 screen=2，坐标却全在外接屏 C 套范围内）。
+/// 按 screen 字段分组会误判「双屏」→ 这 11 项被排除在快照/应用外 → 位置永不同步
+/// （杰哥桌面「新增图标位置全乱」的直接原因，坐标实测核实）。
+/// 判据：两组图标包围盒重叠率 >50% = 同一块物理屏 → 假屏号归入主组。
+/// 只改内存副本不写回 conf（不与 QSpace 打架）。
+func normalizeScreenIds(_ attrs: [[String: Any]]) -> [[String: Any]] {
+    var boxes: [String: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int)] = [:]
+    for it in attrs where isDesktopItem(it) {
+        guard let x = (it["x"] as? NSNumber)?.intValue,
+              let y = (it["y"] as? NSNumber)?.intValue else { continue }
+        let sid = (it["screen"].map { "\($0)" }) ?? "1"
+        var b = boxes[sid] ?? (x, y, x, y, 0)
+        b.minX = min(b.minX, x); b.minY = min(b.minY, y)
+        b.maxX = max(b.maxX, x); b.maxY = max(b.maxY, y)
+        b.count += 1
+        boxes[sid] = b
+    }
+    guard boxes.count > 1,
+          let main = boxes.values.max(by: { $0.count < $1.count }),
+          let mainID = boxes.first(where: { $0.value.count == main.count })?.key else { return attrs }
+    let numericMain = Int(mainID)
+    var out = attrs
+    for (sid, b) in boxes where sid != mainID {
+        let ox = max(0, min(main.maxX, b.maxX) - max(main.minX, b.minX))
+        let oy = max(0, min(main.maxY, b.maxY) - max(main.minY, b.minY))
+        let overlap = ox * oy
+        let bArea = max(1, (b.maxX - b.minX) * (b.maxY - b.minY))
+        if Double(overlap) / Double(bArea) > 0.5 {
+            logLine("screen: 屏号自愈：screen=\(sid) 的 \(b.count) 项坐标落在主屏范围内 → 归入 screen=\(mainID)")
+            for i in out.indices {
+                let s = (out[i]["screen"].map { "\($0)" }) ?? "1"
+                if s == sid {
+                    if out[i]["screen"] as? Int != nil || numericMain != nil {
+                        out[i]["screen"] = numericMain ?? Int(mainID) ?? 1
+                    } else {
+                        out[i]["screen"] = mainID
+                    }
+                }
+            }
+        }
+    }
+    return out
+}
+
 /// 生成网格化快照（v2）：只收目标屏图标（单屏机器：所有图标归一，忽略历史 screen 编号）
 /// 用写死的 spec 参数换算（不再从坐标反推，消除步长误差）
 func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
-    guard let attrs = conf["itemAttrs"] as? [[String: Any]],
-          let ctx = localGridContext(attrs: attrs) else { return nil }
+    guard var attrs = conf["itemAttrs"] as? [[String: Any]] else { return nil }
+    attrs = normalizeScreenIds(attrs)   // ⭐ 屏号自愈：合盖残留旧屏号的项归入主屏（位置同步不漏项）
+    guard let ctx = localGridContext(attrs: attrs) else { return nil }
     let spec = ctx.spec
     let singleScreen = isSingleScreenConf(attrs)
     // 同名文件检测：桌面子目录里可能有同名文件（Desktop/A/report.pdf 与 Desktop/B/report.pdf），
@@ -883,9 +929,11 @@ func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
 /// 应用网格化快照：源格按映射换算成本机格 → 写像素；同名匹配，未知保留
 func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newConf: [String: Any], matched: Int, kept: Int, moved: Int)? {
     guard let srcKey = snap["specKey"] as? String, let src = SPEC_ALL[srcKey],
-          let attrs = conf["itemAttrs"] as? [[String: Any]],
-          let ctx = localGridContext(attrs: attrs),
+          var attrs0 = conf["itemAttrs"] as? [[String: Any]],
           let gridItems = snap["items"] as? [[String: Any]] else { return nil }
+    // ⭐ 屏号自愈：合盖残留旧屏号的项归入主屏，否则它们不参与应用（位置永不同步）
+    let attrs = normalizeScreenIds(attrs0)
+    guard let ctx = localGridContext(attrs: attrs) else { return nil }
     let dst = ctx.spec
     let singleScreen = isSingleScreenConf(attrs)
     // 本机常用 screen 值（单屏归一化目标）
@@ -1680,6 +1728,9 @@ func checkSpecChange() {
 // 防抖 / 冷静期 / 重试状态
 var specChangedAt = 0          // 屏幕/套切换时刻（冷静期内不上报，防止污染中枢）
 var forceApplyOnce = false     // 切套后强制重应用一次（跨套像素不同，不能靠指纹跳过）
+// 应用逻辑版本：applyGridSnapshot 语义变化时 +1，全网首轮自动强制重应用（用新逻辑重算全部位置）
+// v2 = 屏号自愈 normalizeScreenIds（合盖残留旧屏号的项参与应用，位置修复）
+let applyLogicVersion = "2"
 var hubFailStreak = 0          // 中枢连续失败次数
 var hubNextRetryAt = 0         // 下次允许重试的时刻（指数退避）
 // 同步运行时状态：被 syncQueue(后台) 与主线程同时读写 → 收敛到一个带锁的容器里
@@ -1752,23 +1803,35 @@ let rt = SyncRuntime()
 
 func runSyncCycle() {
     syncQueue.async {
+        // 应用逻辑升级检测：版本不同 → 本轮强制重应用一次（穿越 fp==lastApplied 短路）
+        var st0 = loadSyncState()
+        if (st0["applyLogicVersion"] as? String) != applyLogicVersion {
+            forceApplyOnce = true
+            st0["applyLogicVersion"] = applyLogicVersion
+            saveSyncState(st0)
+            logLine("sync: 应用逻辑升级 v\(applyLogicVersion) → 首轮强制重应用（重算全部位置）")
+        }
         checkSpecChange()
         _ = fixOverlapsIfNeeded()   // 本机重叠（QSpace 新建文件放重）→ 自动推开
         autoSnapshotIfNeeded()      // 时光机：布局变化时留历史（限流 10 分钟）
-        broadcastIfNeeded()
+        // ⭐ 先拉后报（2026-11-11 调序）：旧序「先报后拉」在快照口径变化时
+        //   （屏号自愈/对账上线等）会把修正前的乱位置盖上中枢。
+        //   新序：先拉先应用 → baseline 对齐远端 → 后报自然静默；
+        //   用户拖动由防抖保护（10s 内不应用远端），上报延后 ≤10 秒无感。
         let remote = fetchRemote()          // 网络在后台线程
-        guard let r = remote else {
-            // 没拉到数据就谈不上"跳过"，必须清掉标记，
-            // 否则网络恢复后第一次成功拉取会被白白跳过一次（多延迟一轮）
-            rt.skipPullOnce = false
-            return
-        }
         if rt.skipPullOnce {
             rt.skipPullOnce = false
             logLine("sync: 本轮跳过拉取（上报被拒，等下一轮重推）")
             return
         }
-        DispatchQueue.main.sync { applyRemoteIfNewer(r) }
+        if let r = remote {
+            // 没拉到数据时不下应用也不清标记：标记只由「上报被拒」设置，
+            // 网络恢复后的第一次成功拉取不能被白白跳过（多延迟一轮）
+            DispatchQueue.main.sync { applyRemoteIfNewer(r) }
+        } else {
+            rt.skipPullOnce = false
+        }
+        broadcastIfNeeded()
     }
 }
 
