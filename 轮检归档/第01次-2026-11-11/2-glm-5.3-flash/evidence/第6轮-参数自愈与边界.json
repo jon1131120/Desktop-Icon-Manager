@@ -1,0 +1,16 @@
+{
+ "工况5": {
+  "lod": 64,
+  "itemHSpacing": 22,
+  "itemVSpacing": 0,
+  "fontSize": 11
+ },
+ "工况5_告警": "1",
+ "工况6": {
+  "loadConf": null,
+  "告警": "1"
+ },
+ "工况7": {
+  "loadConf": null
+ }
+}

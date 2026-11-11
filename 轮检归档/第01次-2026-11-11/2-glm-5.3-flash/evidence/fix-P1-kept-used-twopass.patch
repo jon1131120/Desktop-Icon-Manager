@@ -1,0 +1,31 @@
+# P1（第01次轮检 R17）：applyGridSnapshot kept 项两段式预登记，消除排序依赖同格重叠
+# 台架验证：kept.md 队尾场景修复前 {(11,8):[icon10,kept.md]} → 修复后 {}；纯映射 38 项 moved=0 零回归
+# 应用方式：git apply fix-P1-kept-used-twopass.patch
+--- a/QSpaceLayoutBar/main.swift
++++ b/QSpaceLayoutBar/main.swift
+@@ -1000,6 +1000,24 @@
+var out: [[String: Any]] = []
+    var matched = 0, kept = 0, moved = 0
+    var used = Set<String>()
+    // ⭐ 两段式预登记（第01次轮检 R17 修复）：旧实现单趟遍历，kept/未匹配项若排在
+    //   attrs 队尾，先处理的映射项看不到它的格子 → 原位保留与 kept 同格重叠
+    //   （实测 kept.md 在队尾时 icon10 与其重叠于 (11,8)，需下一轮 fixOverlaps 再重启才修复）。
+    //   先把全部「将不参与映射」的项占用的格登记进 used，再进主循环。
+    for it0 in attrs {
+        let fullName0 = it0["name"] as? String ?? ""
+        let name0 = (fullName0 as NSString).lastPathComponent
+        let sid0 = (it0["screen"].map { "\($0)" }) ?? "1"
+        let relName0 = fullName0.hasPrefix(desktopRootPath) ? String(fullName0.dropFirst(desktopRootPath.count)) : fullName0
+        let willMatch = isDesktopItem(it0) && (singleScreen || sid0 == ctx.screen.screenId)
+            && (byName[relName0] != nil || byName[name0] != nil || byName[fullName0] != nil)
+        if !willMatch {
+            let kx0 = (it0["x"] as? NSNumber)?.intValue ?? -1
+            let ky0 = (it0["y"] as? NSNumber)?.intValue ?? -1
+            if kx0 >= 0 && ky0 >= 0 {
+                let kc0 = max(1, min(dst.cols, safeInt((Double(kx0) - dst.x0) / dst.colStep, fallback: -1) + 1))
+                let kr0 = max(1, min(dst.rows, safeInt((Double(ky0) - dst.y0) / dst.rowStep, fallback: -1) + 1))
+                used.insert("\(kc0),\(kr0)")
+            }
+        }
+    }
+    for it in attrs {

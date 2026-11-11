@@ -1,0 +1,36 @@
+# P5（第01次轮检 R23）：deploy.sh 实例数校验加固
+#   ①本机分支：grep -c 加 || true 防 set -e 静默中止（实测 0 实例时 EXIT=1 无报错、all 部署中断后续机器）+ 0 实例显式判失败
+#   ②远程分支：补同款校验（旧补丁只护本机分支）；远端变量一律 \\$(…) / \\$CNT_R 转义（外层双引号内不转义会被本地 shell 先行展开——首版补丁即栽在这里，bash -n 抓出）
+# 验证：bash -n 通过；0 实例 fragment 修复后显式报错退出（修复前静默 EXIT=1）
+--- a/scripts/qspace-deploy.sh
++++ b/scripts/qspace-deploy.sh
+@@ 本机分支
+        local CNT; CNT=$(ps -Ao comm | grep -c 'QSpaceLayoutBar$')
+        if [ "$CNT" -gt 1 ]; then
+            echo "实例数=$CNT (>1) 双实例！请 killall 后重试"
+            exit 1
+        fi
+→
+        # ⭐ 第01次轮检 R23 修复：grep -c 无匹配时退出码 1，set -e 下会**静默中止整个脚本**
+        #   （实测 0 实例时 EXIT=1 无任何报错，all 部署中断后续机器）→ 加 || true；
+        #   0 实例（bootstrap/kickstart 失败）也显式判部署失败。
+        local CNT; CNT=$(ps -Ao comm | grep -c 'QSpaceLayoutBar$' || true)
+        if [ "$CNT" -gt 1 ]; then
+            echo "实例数=$CNT (>1) 双实例！请 killall 后重试"
+            exit 1
+        fi
+        if [ "$CNT" -eq 0 ]; then
+            echo "实例数=0：进程未起来（bootstrap/kickstart 失败？），判部署失败"
+            exit 1
+        fi
+
+@@ 远程分支（ssh 双引号内，远端变量/子命令一律 \\$( 与 \\$CNT_R，内层 echo 引号 \\" 转义——首版未转义被 bash -n 抓出）
+            echo -n '实例数: '; ps -Ao comm | grep -c 'QSpaceLayoutBar\$'
+        "
+→
+            echo -n '实例数: '; ps -Ao comm | grep -c 'QSpaceLayoutBar\$'
+            # ⭐ 远程分支同款强校验（第01次轮检 R23：旧补丁只护了本机分支）
+            CNT_R=\$(ps -Ao comm | grep -c 'QSpaceLayoutBar\$' || true)
+            if [ "\$CNT_R" -gt 1 ]; then echo \"实例数=\$CNT_R (>1) 双实例！\"; exit 1; fi
+            if [ "\$CNT_R" -eq 0 ]; then echo \"实例数=0：进程未起来，判部署失败\"; exit 1; fi
+        "

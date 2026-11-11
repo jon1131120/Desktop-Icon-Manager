@@ -1,0 +1,6 @@
+{
+ "被拒轮": "pendingRepushFp=fp, skipPullOnce=true",
+ "次轮": "cycle=skipPull, fetched=true（fetch 已发生仅跳过 apply+广播）",
+ "第三轮": "cycle=done（重推发生）",
+ "日志": "上报被拒→本轮跳过拉取→拉取中枢（注释'本轮不拉远端'失真）"
+}

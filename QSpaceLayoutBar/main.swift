@@ -616,6 +616,8 @@ struct GridSpec {
     let armRight: Int       // 下排组件右缘列
     let zone2: (Int, Int)   // 组件行带（行区间）
     let floorStart: Int     // 地板起始行
+    let midZone: (Int, Int) // 中段区列区间（杰哥定规 2026-11-12：临时卷宗自动弹到这里，
+                            //   左映射区与右锚固定区之间的不同步空带）
     // 固定像素参数（实测）
     let x0: Double
     let y0: Double
@@ -627,11 +629,11 @@ struct GridSpec {
     let font: Int
 }
 
-let SPEC_A = GridSpec(key: "A", cols: 21, rows: 9, topRight: 9, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
+let SPEC_A = GridSpec(key: "A", cols: 21, rows: 9, topRight: 9, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8, midZone: (11, 16),
                        x0: 80, y0: 44, colStep: 79, rowStep: 114, lod: 64, hSp: 11, font: 11)
-let SPEC_B = GridSpec(key: "B", cols: 19, rows: 9, topRight: 8, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8,
+let SPEC_B = GridSpec(key: "B", cols: 19, rows: 9, topRight: 8, topRows: 4, armRight: 4, zone2: (5, 7), floorStart: 8, midZone: (10, 14),
                        x0: 53, y0: 43, colStep: 90, rowStep: 114, lod: 64, hSp: 22, font: 11)
-let SPEC_C = GridSpec(key: "C", cols: 22, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7,
+let SPEC_C = GridSpec(key: "C", cols: 22, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7, midZone: (12, 17),
                        x0: 120, y0: 40, colStep: 113, rowStep: 148, lod: 96, hSp: 11, font: 11)
 let SPEC_ALL: [String: GridSpec] = ["A": SPEC_A, "B": SPEC_B, "C": SPEC_C]
 
@@ -860,6 +862,12 @@ func isDesktopItem(_ it: [String: Any]) -> Bool {
 /// 判据：两组图标包围盒重叠率 >50% = 同一块物理屏 → 假屏号归入主组。
 /// 只改内存副本不写回 conf（不与 QSpace 打架）。
 func normalizeScreenIds(_ attrs: [[String: Any]]) -> [[String: Any]] {
+    // v5 判据（第01次轮检 P2 四修）：归并判据用「非主屏组坐标对主屏网格的对齐率」——
+    //   失真项物理上就摆在主屏网格上（x≡x0 mod cw、y≡y0 mod rh）→ 对齐率≈100% → 归并；
+    //   真双屏的 B 套项按 53+90n/43+114n 摆放，对 C 网格（120+113m/40+148m）对齐率低 → 不动。
+    //   不依赖 screen 字段（失真源）也不依赖 screenWidth（生产 conf 无此字段）。
+    //   v4 的 isSingleScreenConf 门卫自残：它按 screen 值分组，失真 conf（混值）永远
+    //   判非单屏 → 永远拦住自己的归并使命（snaptest moved=3 实锤），已废弃。
     var boxes: [String: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int)] = [:]
     for it in attrs where isDesktopItem(it) {
         guard let x = (it["x"] as? NSNumber)?.intValue,
@@ -877,21 +885,31 @@ func normalizeScreenIds(_ attrs: [[String: Any]]) -> [[String: Any]] {
     let numericMain = Int(mainID)
     var out = attrs
     for (sid, b) in boxes where sid != mainID {
-        // 判据修正（2026-11-11 轮检 R7/R22）：旧式用「交集面积 / 旧组包围盒面积」，
-        //   旧组只要有一半在主屏包围盒外就判「不同屏」-> 旧屏号项滞留 -> 位置永不同步
-        //   （实测：单行分布 ratio=0.000、下沿超出 ratio=0.448，两种都误判）。
-        //   新式用「交集面积 / 旧组自身面积」：旧组整体落在主屏范围内即算同一屏。
-        let ox = max(0, min(main.maxX, b.maxX) - max(main.minX, b.minX))
-        let oy = max(0, min(main.maxY, b.maxY) - max(main.minY, b.minY))
-        let overlap = ox * oy
-        let bArea = max(1, (b.maxX - b.minX) * (b.maxY - b.minY))
-        // 单行/单列分布时包围盒面积为 0 -> 退化为「点数判据」
-        let degenerate = (b.maxY - b.minY) == 0 || (b.maxX - b.minX) == 0
-        let ratio = Double(overlap) / Double(bArea)
-        let sameScreen = degenerate
-            ? (overlap > 0 || pointInsideMain(b, main))
-            : (ratio > 0.5 || pointInsideMain(b, main))
-        if sameScreen {
+        // v5 判据：主屏网格对齐率（失真项按主屏网格摆 → 高对齐 → 归并；
+        //   真双屏他套项对主屏网格对齐率低 → 保留）。容差 8px（坐标±8 内算对齐）。
+        let mainItems = attrs.filter { (($0["screen"].map { "\($0)" }) ?? "1") == mainID }
+        if let mctx = localGridContext(attrs: mainItems) {
+            let sp = mctx.spec
+            let nonMain = attrs.filter { (($0["screen"].map { "\($0)" }) ?? "1") == sid }
+            var aligned = 0
+            for it2 in nonMain {
+                guard let x2 = (it2["x"] as? NSNumber)?.intValue,
+                      let y2 = (it2["y"] as? NSNumber)?.intValue else { continue }
+                var dx = (Double(x2) - sp.x0).truncatingRemainder(dividingBy: sp.colStep)
+                if dx < 0 { dx += sp.colStep }
+                dx = min(dx, sp.colStep - dx)
+                var dy = (Double(y2) - sp.y0).truncatingRemainder(dividingBy: sp.rowStep)
+                if dy < 0 { dy += sp.rowStep }
+                dy = min(dy, sp.rowStep - dy)
+                if dx <= 8 && dy <= 8 { aligned += 1 }
+            }
+            let alignRatio = nonMain.isEmpty ? 0.0 : Double(aligned) / Double(nonMain.count)
+            if alignRatio < 0.8 {
+                logLine("screen: 屏号自愈跳过 screen=\(sid)（对主屏网格对齐率 \(Int(alignRatio*100))% < 80%，判定为真双屏）")
+                continue
+            }
+            }
+            do {
             logLine("screen: 屏号自愈：screen=\(sid) 的 \(b.count) 项坐标落在主屏范围内 → 归入 screen=\(mainID)")
             for i in out.indices {
                 let s = (out[i]["screen"].map { "\($0)" }) ?? "1"
@@ -908,11 +926,115 @@ func normalizeScreenIds(_ attrs: [[String: Any]]) -> [[String: Any]] {
     return out
 }
 
-/// 旧屏号组是否有点落在主屏图标包围盒内（退化场景兜底判据）
+/// 旧屏号组是否有点落在主屏图标包围盒内（v4：仅单屏 conf 门卫通过后使用，
+/// 失真残留项的兜底判据；真双屏 conf 在函数入口已提前 return，不会走到这里）
 func pointInsideMain(_ b: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int),
                       _ main: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int)) -> Bool {
     return b.minX <= main.maxX && b.maxX >= main.minX
         && b.minY <= main.maxY && b.maxY >= main.minY
+}
+
+/// ⭐ 临时卷宗归位（2026-11-12 杰哥定规）：装机/插拔产生的临时卷宗（安装器残留、
+/// 相机卡、Steam、Preboot 等）出现在右锚固定区或 VIP 三格时，自动弹到中段区
+/// （左映射区与右锚之间的不同步空带）第一个空格，从上往下、从左列到右列依次找位。
+/// VIP 三格（右上列头三格：内置盘 / 外接固态 / 群晖）里的 VIP 卷宗不动；
+/// 非 VIP 卷宗误入 VIP 格也弹去中段区。
+/// ⭐ VIP 三位管理（2026-11-12 杰哥定规）：右上列头三格绑定三个常驻项——
+///   (cols,1)=内置盘  (cols,2)=Jon113 固态（常驻，拔掉留空、插上归位）  (cols,3)=SynologyDrive。
+///   规则：全网任何文件都不许占/改 VIP 位。发现占位 → 本机先弹开（中段区），然后再同步。
+///   VIP 项漂了 → 归位。其他卷宗在右锚区 → 弹中段区。不认识的新卷宗一律视为临时。
+let VIP_SLOT_NAMES: [Int: [String]] = [
+    1: ["/", "/Volumes/Macintosh HD"],
+    2: ["/Volumes/Jon113"],
+    3: ["SynologyDrive"],
+]
+func vipSlotRow(_ name: String) -> Int? {
+    let base = (name as NSString).lastPathComponent
+    let trimmed = name.trimmingCharacters(in: .whitespaces)
+    let baseTrimmed = base.trimmingCharacters(in: .whitespaces)
+    for (row, names) in VIP_SLOT_NAMES {
+        for pat in names {
+            // 卷宗名常带尾随空格（/Volumes/Jon113␣␣），trim 后精确匹配；Jon113 用前缀兜底
+            if trimmed == pat || baseTrimmed == pat { return row }
+            if pat == "/Volumes/Jon113" && trimmed.hasPrefix("/Volumes/Jon113") { return row }
+        }
+    }
+    return nil
+}
+func relocateStrayVolumes(_ conf: [String: Any]) -> [String: Any]? {
+    guard var attrs = conf["itemAttrs"] as? [[String: Any]],
+          let ctx = localGridContext(attrs: attrs) else { return nil }
+    let spec = ctx.spec
+    let anchorColStart = spec.cols - 4          // 右锚固定区起始列（右 5 列）
+    var occupied = Set<String>()
+    var changed = false
+    // 第一遍：占位检测——VIP 格被"非对应 VIP 项"占用 → 弹中段区；右锚区杂卷 → 弹中段区
+    struct Move { var idx: Int; var name: String }
+    var evict: [Move] = []
+    for (i, it) in attrs.enumerated() {
+        guard let n = it["name"] as? String,
+              let x = (it["x"] as? NSNumber)?.intValue,
+              let y = (it["y"] as? NSNumber)?.intValue else { continue }
+        let c = max(1, min(spec.cols, safeInt((Double(x) - spec.x0) / spec.colStep, fallback: -1) + 1))
+        let r = max(1, min(spec.rows, safeInt((Double(y) - spec.y0) / spec.rowStep, fallback: -1) + 1))
+        occupied.insert("\(c),\(r)")
+        let vipRow = vipSlotRow(n)
+        let isVolume = n.hasPrefix("/Volumes")
+        var mustEvict = false
+        var why = ""
+        if c == spec.cols && r <= 3 {
+            if vipRow != r {           // 占了别人的 VIP 位（含 VIP 项串位）
+                mustEvict = true; why = "占 VIP\(r) 位"
+            }
+        } else if c >= anchorColStart && isVolume && vipRow == nil {
+            mustEvict = true; why = "临时卷宗入右锚区"
+        }
+        if mustEvict {
+            evict.append(Move(idx: i, name: n))
+            changed = true
+            logLine("volumes: \((n as NSString).lastPathComponent) \(why) → 弹中段区")
+        }
+    }
+    // 第二遍：VIP 归位——对应 VIP 项存在但漂位 → 拉回本套 VIP 格
+    for (row, names) in VIP_SLOT_NAMES {
+        for (i, it) in attrs.enumerated() {
+            guard let n = it["name"] as? String else { continue }
+            let base = (n as NSString).lastPathComponent
+            guard names.contains(n) || names.contains(base) else { continue }
+            guard let x = (it["x"] as? NSNumber)?.intValue,
+                  let y = (it["y"] as? NSNumber)?.intValue else { continue }
+            let c = max(1, min(spec.cols, safeInt((Double(x) - spec.x0) / spec.colStep, fallback: -1) + 1))
+            let r = max(1, min(spec.rows, safeInt((Double(y) - spec.y0) / spec.rowStep, fallback: -1) + 1))
+            if c != spec.cols || r != row {
+                let nx = spec.x0 + Double(spec.cols - 1) * spec.colStep
+                let ny = spec.y0 + Double(row - 1) * spec.rowStep
+                attrs[i]["x"] = Int(nx); attrs[i]["y"] = Int(ny)
+                occupied.remove("\(c),\(r)"); occupied.insert("\(spec.cols),\(row)")
+                changed = true
+                logLine("volumes: VIP \(base) 从 (\(c),\(r)) 归位 (\(spec.cols),\(row))")
+            }
+        }
+    }
+    guard changed else { return nil }
+    // 弹去中段区第一个空格：从左列到右列、从上到下
+    var cursor = (spec.midZone.0, 1)
+    for mv in evict {
+        while occupied.contains("\(cursor.0),\(cursor.1)") {
+            cursor.1 += 1
+            if cursor.1 > spec.rows { cursor.1 = 1; cursor.0 += 1 }
+            if cursor.0 > spec.midZone.1 { cursor.0 = spec.midZone.0 }
+        }
+        let nx = spec.x0 + Double(cursor.0 - 1) * spec.colStep
+        let ny = spec.y0 + Double(cursor.1 - 1) * spec.rowStep
+        attrs[mv.idx]["x"] = Int(nx)
+        attrs[mv.idx]["y"] = Int(ny)
+        occupied.insert("\(cursor.0),\(cursor.1)")
+        cursor.1 += 1
+        if cursor.1 > spec.rows { cursor.1 = 1; cursor.0 += 1 }
+    }
+    var nc = conf
+    nc["itemAttrs"] = attrs
+    return nc
 }
 
 /// 生成网格化快照（v2）：只收目标屏图标（单屏机器：所有图标归一，忽略历史 screen 编号）
@@ -936,6 +1058,7 @@ func makeGridSnapshot(conf: [String: Any]) -> [String: Any]? {
     for it in attrs {
         let sid = (it["screen"].map { "\($0)" }) ?? "1"
         guard isDesktopItem(it),
+              vipSlotRow(it["name"] as? String ?? "") == nil,
               singleScreen || sid == ctx.screen.screenId,
               let name = it["name"] as? String,
               let x = (it["x"] as? NSNumber)?.doubleValue,
@@ -1000,6 +1123,32 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
     var out: [[String: Any]] = []
     var matched = 0, kept = 0, moved = 0
     var used = Set<String>()
+    // ⭐ 两段式预登记（第01次轮检 R17/P1）：旧实现单趟遍历，kept/未匹配项若排在
+    //   attrs 队尾，先处理的映射项看不到它的格子 → 原位保留与 kept 同格重叠
+    //   （实测 kept.md 在队尾时 icon10 与其重叠于 (11,8)，需下一轮 fixOverlaps 才修复）。
+    //   先把全部「将不参与映射」的项占用的格登记进 used，再进主循环。
+    for it0 in attrs {
+        let fullName0 = it0["name"] as? String ?? ""
+        let name0 = (fullName0 as NSString).lastPathComponent
+        let sid0 = (it0["screen"].map { "\($0)" }) ?? "1"
+        let relName0 = fullName0.hasPrefix(desktopRootPath) ? String(fullName0.dropFirst(desktopRootPath.count)) : fullName0
+        let willMatch = isDesktopItem(it0) && (singleScreen || sid0 == ctx.screen.screenId)
+            && vipSlotRow(fullName0) == nil && vipSlotRow(name0) == nil
+            && (byName[relName0] != nil || byName[name0] != nil || byName[fullName0] != nil)
+        if !willMatch {
+            let kx0 = (it0["x"] as? NSNumber)?.intValue ?? -1
+            let ky0 = (it0["y"] as? NSNumber)?.intValue ?? -1
+            if kx0 >= 0 && ky0 >= 0 {
+                let kc0 = max(1, min(dst.cols, safeInt((Double(kx0) - dst.x0) / dst.colStep, fallback: -1) + 1))
+                let kr0 = max(1, min(dst.rows, safeInt((Double(ky0) - dst.y0) / dst.rowStep, fallback: -1) + 1))
+                used.insert("\(kc0),\(kr0)")
+            }
+        }
+    }
+    // ⭐ VIP 三格永久禁占（2026-11-12 杰哥定规）：右上列头三格 = 内置盘 / 外接固态 / 群晖
+    //   三个 VIP 卷宗的固定位（卷宗不在也留空）。任何映射项不许落进去——目标撞 VIP 格
+    //   时由推移逻辑避让（与 kept 占格同路径）。
+    for vipRow in 1...3 { used.insert("\(dst.cols),\(vipRow)") }
     for it in attrs {
         var ni = it
         let fullName = it["name"] as? String ?? ""
@@ -1007,6 +1156,7 @@ func applyGridSnapshot(_ snap: [String: Any], to conf: [String: Any]) -> (newCon
         let sid = (it["screen"].map { "\($0)" }) ?? "1"
         let relName = fullName.hasPrefix(desktopRootPath) ? String(fullName.dropFirst(desktopRootPath.count)) : fullName
         guard isDesktopItem(it), (singleScreen || sid == ctx.screen.screenId),
+              vipSlotRow(fullName) == nil && vipSlotRow(name) == nil,
               let (c, r) = byName[relName] ?? byName[name] ?? byName[fullName] else {
             // ⭐ kept 项（本机已有/无法匹配的图标）占的格必须登记进 used：
             //   否则映射落点撞上 kept 项时不避让 → 写盘后同格重叠 → verify 报警
@@ -1371,6 +1521,13 @@ func broadcastIfNeeded() {
     guard let conf = loadConf() else {
         // 异常态不能静默：conf 读不到会让同步"看起来在跑但什么都不发"
         logLine("sync: 广播跳过（desktop.conf 读不到或损坏），本轮不发")
+        return
+    }
+    // ⭐ 临时卷宗归位（2026-11-12 杰哥定规）：右锚区/VIP 格发现临时卷宗 → 弹中段区并写盘。
+    //   写盘后本轮直接返回（下一轮用新 conf 快照上报），避免旧快照覆盖刚写的位置。
+    if let fixed = relocateStrayVolumes(conf) {
+        atomicWriteConfAndRestartQSpace(fixed)
+        logLine("sync: 本轮检测到临时卷宗占位右锚区，已弹至中段区（写盘+重启 QSpace），下一轮上报新布局")
         return
     }
     guard var snap = makeGridSnapshot(conf: conf) else {

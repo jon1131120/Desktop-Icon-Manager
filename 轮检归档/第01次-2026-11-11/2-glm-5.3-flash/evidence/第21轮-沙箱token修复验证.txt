@@ -1,0 +1,4 @@
+修复版 build_sandbox.sh 重建沙箱 :18897
+错误 token → HTTP 401（401 = 令牌校验恢复）
+正确 token → HTTP 200（200 = 正常放行）
+结论：P3 修复生效

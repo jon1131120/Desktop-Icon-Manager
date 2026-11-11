@@ -1,0 +1,20 @@
+{
+ "snap1": {
+  "specKey": "B",
+  "iconCount": 39,
+  "layoutFingerprint": "1a12f1e593be88e"
+ },
+ "post": {
+  "http": 200,
+  "body": "{'accepted': True, 'syncAt': 1794410340}"
+ },
+ "hub_state_items": 39,
+ "apply": {
+  "matched": 38,
+  "moved": 0,
+  "kept": 0
+ },
+ "resnap_fp_match": false,
+ "dup_cells": 0,
+ "race_bad_reads": 0
+}

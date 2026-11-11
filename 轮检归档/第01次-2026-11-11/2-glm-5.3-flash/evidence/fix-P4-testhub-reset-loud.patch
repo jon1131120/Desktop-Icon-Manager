@@ -1,0 +1,21 @@
+# P4（第01次轮检 R22）：test-hub.py reset 兜底显式报错——交接书声称「reset 失败显式报错」已提交，
+# 但 git diff aa53492..HEAD 实测只有 SANDBOX_HOME 清场路径，兜底分支仍 except:pass 静默吞错。
+# 验证：对不可达/门禁拦截目标调用 reset → 修复前静默继续（测试跑在脏状态），修复后 SystemExit 带指引。
+# py_compile 通过。
+--- a/scripts/test-hub.py
++++ b/scripts/test-hub.py
+@@ reset() 兜底分支
+    req = urllib.request.Request(BASE + "/reset", data=b"", headers={"X-Hub-Token": TOKEN}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:
+        pass
+→
+    req = urllib.request.Request(BASE + "/reset", data=b"", headers={"X-Hub-Token": TOKEN}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception as e:
+        # ⭐ 显式报错（第01次轮检 R22 修复）：旧实现静默 pass → 沙箱无 /reset（或被门禁拦截）
+        #   时用例间状态不隔离、17 项结论不可信。失败必须中止测试并给出指引。
+        raise SystemExit(f"reset 清场失败（{e}）：沙箱 {BASE} 无 /reset 或被门禁拦截——"
+                         f"请设 SANDBOX_HOME 直接删文件清场，或用含 /reset 注入的沙箱构建脚本")

@@ -1,0 +1,7 @@
+{
+ "hubServerTime返回": {
+  "hubServerTime": null
+ },
+ "对照直连status": "可达",
+ "后果链": "时钟超前>300s 机器：POST 400 future → hubServerTime()=nil 无法自愈重发 → 走 else 分支 pendingRepushFp → 下轮重推仍400 → 放弃(baseline=fp) 本机改动被吞；且 skipPullOnce=true 期间不应用远端"
+}

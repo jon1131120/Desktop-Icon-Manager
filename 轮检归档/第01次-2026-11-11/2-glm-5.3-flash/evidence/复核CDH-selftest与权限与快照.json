@@ -1,0 +1,7 @@
+{
+ "selftest_log": "{\"pass\":true}\n2026-11-11 23:16:22: selftest: 126/126 吻合（跳过超界点 0 个）",
+ "selftest_claimed_by_minimax": "132/132",
+ "same_minute_snapshots": [],
+ "latest_perm": "0o600",
+ "archive_perm": "0o600"
+}

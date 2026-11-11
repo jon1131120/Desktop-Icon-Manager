@@ -1,0 +1,6 @@
+{
+ "损坏时GET_layout": 200,
+ "损坏时GET_status": 200,
+ "行为": "load_latest 内部 except Exception: return None（hub-server.py:84-91）→ 损坏文件静默按空中枢处理（{} 200），客户端安静停摆不崩；下一次接受的 POST 经 save_latest os.replace 自动覆盖坏文件完成自愈",
+ "更正": "首测误判 500（以为 json.load 异常外溢），实测 200 空响应——优雅降级"
+}

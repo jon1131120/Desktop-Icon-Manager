@@ -1,0 +1,25 @@
+E2 复测: {'accepted': True, 'syncAt': 1794410243}
+
+=== test-hub.py 全套输出 ===
+== 中枢契约测试（沙箱 :18879，绝不碰生产 :18878）==
+  ✓ 合法上报被接受
+  ✓ 旧 syncAt 被拒 (older, 不被保护窗抢答)
+  ✓ 无标记覆盖 active 版本 → protected
+  ✓ 另一台带 active 覆盖 → 接受（用户 vs 用户后改者赢）
+  ✓ 白名单外 sourceMachine → 400
+  ✓ items 非数组 → 400
+  ✓ items 空 → 400
+  ✓ item 缺 col → 400
+  ✓ col 负数 → 400
+  ✓ col 是 float → 400
+  ✓ name 非字符串 → 400
+  ✓ col 超范围 → 400
+  ✓ userActiveUntil 非法类型 → 不 500
+  ✓ syncAt 未来过远 → 400
+  ✓ 错误 token → 401
+  ✓ 空 token → 401
+  ✓ 并发后 syncAt 单调（=最大值）
+
+结果: 17 通过, 0 失败
+
+exit=0

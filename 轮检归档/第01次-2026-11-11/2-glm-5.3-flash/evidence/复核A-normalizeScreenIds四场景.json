@@ -1,0 +1,206 @@
+{
+ "a_单行stale": {
+  "screens": [
+   1
+  ]
+ },
+ "b_下沿超出": {
+  "screens": [
+   1
+  ]
+ },
+ "c_真实双屏重叠": {
+  "screens": [
+   "1"
+  ],
+  "snapshot": {
+   "desktopSettings": {
+    "lod": 64
+   },
+   "formatVersion": 2,
+   "grid": {
+    "cols": 19,
+    "colStep": 90,
+    "rows": 9,
+    "rowStep": 114,
+    "x0": 53,
+    "y0": 43
+   },
+   "iconCount": 32,
+   "items": [
+    {
+     "col": 1,
+     "name": "m00.txt",
+     "row": 8
+    },
+    {
+     "col": 2,
+     "name": "m01.txt",
+     "row": 8
+    },
+    {
+     "col": 3,
+     "name": "m02.txt",
+     "row": 8
+    },
+    {
+     "col": 4,
+     "name": "m03.txt",
+     "row": 8
+    },
+    {
+     "col": 5,
+     "name": "m04.txt",
+     "row": 8
+    },
+    {
+     "col": 6,
+     "name": "m05.txt",
+     "row": 8
+    },
+    {
+     "col": 7,
+     "name": "m06.txt",
+     "row": 8
+    },
+    {
+     "col": 8,
+     "name": "m07.txt",
+     "row": 8
+    },
+    {
+     "col": 9,
+     "name": "m08.txt",
+     "row": 8
+    },
+    {
+     "col": 10,
+     "name": "m09.txt",
+     "row": 8
+    },
+    {
+     "col": 11,
+     "name": "m10.txt",
+     "row": 8
+    },
+    {
+     "col": 12,
+     "name": "m11.txt",
+     "row": 8
+    },
+    {
+     "col": 13,
+     "name": "m12.txt",
+     "row": 8
+    },
+    {
+     "col": 14,
+     "name": "m13.txt",
+     "row": 8
+    },
+    {
+     "col": 15,
+     "name": "m14.txt",
+     "row": 8
+    },
+    {
+     "col": 16,
+     "name": "m15.txt",
+     "row": 8
+    },
+    {
+     "col": 1,
+     "name": "m16.txt",
+     "row": 9
+    },
+    {
+     "col": 2,
+     "name": "m17.txt",
+     "row": 9
+    },
+    {
+     "col": 3,
+     "name": "m18.txt",
+     "row": 9
+    },
+    {
+     "col": 4,
+     "name": "m19.txt",
+     "row": 9
+    },
+    {
+     "col": 5,
+     "name": "m20.txt",
+     "row": 9
+    },
+    {
+     "col": 6,
+     "name": "m21.txt",
+     "row": 9
+    },
+    {
+     "col": 7,
+     "name": "m22.txt",
+     "row": 9
+    },
+    {
+     "col": 8,
+     "name": "m23.txt",
+     "row": 9
+    },
+    {
+     "col": 2,
+     "name": "e0.txt",
+     "row": 9
+    },
+    {
+     "col": 3,
+     "name": "e1.txt",
+     "row": 9
+    },
+    {
+     "col": 4,
+     "name": "e2.txt",
+     "row": 9
+    },
+    {
+     "col": 6,
+     "name": "e3.txt",
+     "row": 9
+    },
+    {
+     "col": 7,
+     "name": "e4.txt",
+     "row": 9
+    },
+    {
+     "col": 8,
+     "name": "e5.txt",
+     "row": 9
+    },
+    {
+     "col": 9,
+     "name": "e6.txt",
+     "row": 9
+    },
+    {
+     "col": 11,
+     "name": "e7.txt",
+     "row": 9
+    }
+   ],
+   "layoutFingerprint": "953f122a91c4dba1",
+   "screenId": "1",
+   "screenSize": "1728x1117",
+   "sourceMachine": "MBP",
+   "specKey": "B",
+   "syncAt": 1794410064
+  }
+ },
+ "d_双屏不相交": {
+  "screens": [
+   "1",
+   "2"
+  ]
+ }
+}

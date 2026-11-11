@@ -68,6 +68,7 @@ for h,spec in [("mbp","C"),("air","A"),("studio","C")]:
     main_scr = max(scr, key=lambda k: len(scr[k])) if scr else ""
     main = scr.get(main_scr, {})
     mine=set(main); hubn=set(hubitems)
+    mine -= {"SynologyDrive"}   # VIP 桌面项不进中枢快照（2026-11-12 杰哥定规），名单比对排除
     other_screens=set()
     for scr,items in scr.items() if False else scr_map.items():
         if scr != main_scr: other_screens |= set(items)

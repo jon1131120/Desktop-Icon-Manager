@@ -1,0 +1,9 @@
+{
+ "12a": {
+  "reason": "protected"
+ },
+ "12b": {
+  "accepted": true,
+  "activeMachine": "Air"
+ }
+}

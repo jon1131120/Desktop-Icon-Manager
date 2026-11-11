@@ -1,0 +1,14 @@
+# P6（第01次轮检 R24）：check-layout.py 套判定兜底与生产 specForSize 对齐（容差外 → 显式提示 exit 2，不再硬判 'C'）
+# 依据：main.swift specForSize 容差外返回 nil（1650-1669/1769-1800 实测扫描），check-layout 旧兜底判 'C' 与生产分叉
+# 验证：py_compile 通过；公式对照 w=1650 旧='C'新=None、w=1728 不变='B'
+--- a/scripts/check-layout.py
++++ b/scripts/check-layout.py
+@@ -12 +12,6 @@
+key=('A' if abs(w-1710)<=abs(w-1728) else 'B') if (abs(w-1710)<=40 and abs(w-1728)<=40) else ('A' if abs(w-1710)<=40 else ('B' if abs(w-1728)<=40 else 'C'))
+→
+# 套判定与生产 specForSize 对齐（第01次轮检 R24）：A/B 容差外生产返回 nil（走 machineTag 兜底），
+# 本脚本不再硬兜 'C'——宽度异常时旧兜底用 C 套参数误算越界/重叠。改为显式提示并退出（exit 2）。
+key=('A' if abs(w-1710)<=abs(w-1728) else 'B') if (abs(w-1710)<=40 and abs(w-1728)<=40) else ('A' if abs(w-1710)<=40 else ('B' if abs(w-1728)<=40 else None))
+if key is None:
+    print(f"套判定失败：屏宽 {w} 不在 A/B 容差内（生产将走 machineTag 兜底，请人工核对套参数）")
+    sys.exit(2)

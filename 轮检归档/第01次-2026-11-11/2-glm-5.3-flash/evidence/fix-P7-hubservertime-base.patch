@@ -1,0 +1,19 @@
+# P7（第01次轮检 R16/R30）：hubServerTime 改走 hubGet("/status")——旧实现裸路径无 host 恒 nil，
+# '时钟超前自愈'分支永不可达（实测 hubServerTime() 返回 nil、对照 hubGet 可达）。
+# 修复后钟超前>300s 机器可经 hubServerTime 重发自愈，不再吞改动。
+# 应用方式：git apply fix-P7-hubservertime-base.patch
+--- a/QSpaceLayoutBar/main.swift
++++ b/QSpaceLayoutBar/main.swift
+@@ -1300,3 +1300,7 @@
+func hubServerTime() -> Int? {
+    guard let o = httpGetJSON("/status"), let t = o["serverTime"] as? Int else { return nil }
+    return t
+}
+→
+func hubServerTime() -> Int? {
+    // ⭐ 第01次轮检 R30 修复：旧实现以裸路径 "/status" 调 httpGetJSON（URL 无 host →
+    //   URLSession 必败）→ 恒返回 nil，"时钟超前自愈"分支（broadcastIfNeeded 内）永不可达。
+    //   改走 hubGet（带 LAN→ZT base 回退与令牌头），与生产其他请求同路径。
+    guard let o = hubGet("/status"), let t = o["serverTime"] as? Int else { return nil }
+    return t
+}

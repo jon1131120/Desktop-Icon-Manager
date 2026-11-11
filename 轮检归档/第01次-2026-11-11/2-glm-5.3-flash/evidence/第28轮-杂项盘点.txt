@@ -1,0 +1,12 @@
+1. 对账日志用 rt.lastSeenItems.count 显示「本机 N 项」，吸收期/首启动等场景下是旧采样计数（本轮工况日志实测出现'本机 0 项 vs 中枢 38 项'的误导输出），应改用当前快照项数
+   证据: QSpaceLayoutBar/main.swift:1474
+2. build_sandbox.sh 的 re.sub(r'ALLOWED_SOURCES\s*=\s*\[[^\]]*\]') 对生产的 {} 集合字面量不匹配 → 静默 no-op（沙箱仍认 MBP/Air/Studio；对本机测试无害但脚本意图失效无告警）
+   证据: /tmp/build_sandbox.sh
+3. hub-server.py:34 行尾挂了复制的冗余注释（'# 单轴坐标上限…'与 30 行重复），纯排版噪音: _get_log_at = {}        # peer -> last ts         # 单轴坐标上限（S
+   证据: hub/hub-server.py:34
+4. main.swift:1980 注释'每 3 秒一轮（广播本机 + 拉取其他机器）'但 1997 行 Timer 实际 10 秒——注释失真
+   证据: QSpaceLayoutBar/main.swift:1980
+5. main.swift:829 兜底 ternary 的 machineTag=='Air' 分支不可达（switch 已对 Air return SPEC_A）——死代码
+   证据: QSpaceLayoutBar/main.swift:829
+6. cmp-consistency.py:60 refs 字典定义后未使用（死变量）；:72 'for scr,items in scr.items() if False else scr_map.items()' 是if False else 残留写法（行为正确但可读性差）
+   证据: scripts/cmp-consistency.py:60

@@ -1,0 +1,62 @@
+# P2（第01次轮检 R18）：normalizeScreenIds 判据 v3——screenWidth/screenHeight 相等为主判据 + 包含性兜底
+# 修复 MiniMax fix-R7 引入的「真双屏误并」回归；台架 8 场景全过（a/b/工况8/8b 仍归并，c/d 不误并，无尺寸走包含性兜底）
+# 下游实测：真双屏场景 makeGridSnapshot 24 项 0 外接混入（修复前 32 项伪单屏）
+# 应用方式：本文件为结构化描述，三段改动按序手工应用（box 元组/判据/删 pointInsideMain）
+@@ 屏号分组携带尺寸
+    var boxes: [String: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int)] = [:]
+    for it in attrs where isDesktopItem(it) {
+        guard let x = (it["x"] as? NSNumber)?.intValue,
+              let y = (it["y"] as? NSNumber)?.intValue else { continue }
+        let sid = (it["screen"].map { "\($0)" }) ?? "1"
+        var b = boxes[sid] ?? (x, y, x, y, 0)
+        b.minX = min(b.minX, x); b.minY = min(b.minY, y)
+        b.maxX = max(b.maxX, x); b.maxY = max(b.maxY, y)
+        b.count += 1
+        boxes[sid] = b
+    }
+→
+    var boxes: [String: (minX: Int, minY: Int, maxX: Int, maxY: Int, count: Int, w: Int, h: Int)] = [:]
+    for it in attrs where isDesktopItem(it) {
+        guard let x = (it["x"] as? NSNumber)?.intValue,
+              let y = (it["y"] as? NSNumber)?.intValue else { continue }
+        let sid = (it["screen"].map { "\($0)" }) ?? "1"
+        let w0 = (it["screenWidth"] as? NSNumber)?.intValue ?? 0
+        let h0 = (it["screenHeight"] as? NSNumber)?.intValue ?? 0
+        var b = boxes[sid] ?? (x, y, x, y, 0, w0, h0)
+        b.minX = min(b.minX, x); b.minY = min(b.minY, y)
+        b.maxX = max(b.maxX, x); b.maxY = max(b.maxY, y)
+        b.count += 1
+        if b.w == 0 { b.w = w0 }
+        if b.h == 0 { b.h = h0 }
+        boxes[sid] = b
+    }
+
+@@ 判据 v3
+        let ox = max(0, min(main.maxX, b.maxX) - max(main.minX, b.minX))
+        let oy = max(0, min(main.maxY, b.maxY) - max(main.minY, b.minY))
+        let overlap = ox * oy
+        let bArea = max(1, (b.maxX - b.minX) * (b.maxY - b.minY))
+        // 单行/单列分布时包围盒面积为 0 -> 退化为「点数判据」
+        let degenerate = (b.maxY - b.minY) == 0 || (b.maxX - b.minX) == 0
+        let ratio = Double(overlap) / Double(bArea)
+        let sameScreen = degenerate
+            ? (overlap > 0 || pointInsideMain(b, main))
+            : (ratio > 0.5 || pointInsideMain(b, main))
+→
+        // 判据 v3（第01次轮检 R18 修复）：conf 坐标是屏相对坐标，两块物理屏的数值
+        //   区间天然重叠，「包围盒相交」会把真第二屏并进主屏（实测外接屏 8 项被误并、
+        //   快照污染成 32 项伪单屏）。本质判据：同一物理屏的 screenWidth/screenHeight
+        //   相同——合盖重编号只改 screen 号、不改尺寸。尺寸缺失（旧 conf）时退回
+        //   「旧组包含于主组」判据（15% 容差，比旧「任意相交」严格）。
+        let sameScreen: Bool
+        if b.w > 0 && main.w > 0 {
+            sameScreen = b.w == main.w && b.h == main.h
+        } else {
+            let tolX = max(1, Int(Double(main.maxX - main.minX) * 0.15))
+            let tolY = max(1, Int(Double(main.maxY - main.minY) * 0.15))
+            sameScreen = b.minX >= main.minX - tolX && b.maxX <= main.maxX + tolX
+                && b.minY >= main.minY - tolY && b.maxY <= main.maxY + tolY
+        }
+
+@@ 删除 pointInsideMain（判据不再引用，避免死代码）
+（删除 main.swift:911-916 的 pointInsideMain 函数）

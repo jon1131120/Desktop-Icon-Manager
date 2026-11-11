@@ -1,0 +1,15 @@
+{
+ "E1_归档路径": {
+  "http": 200,
+  "body": "{'accepted': True, 'syncAt': 1794410227}"
+ },
+ "E2_local路径": {
+  "http": 200,
+  "body": "{'accepted': False, 'reason': 'older', 'latestSyncAt': 1794410227}"
+ },
+ "E3_修复前对照": {
+  "http": 400,
+  "body": "{\"error\": \"unknown sourceMachine (allowed: ['Air', 'MBP', 'Studio'])\"}"
+ },
+ "F_sete": "实例数: 0\nEXIT=1"
+}

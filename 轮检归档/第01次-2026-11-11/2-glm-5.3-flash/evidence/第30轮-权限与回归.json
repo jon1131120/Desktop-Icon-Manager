@@ -1,0 +1,13 @@
+{
+ "权限": {
+  "hub layout.json": "0o600",
+  "hub archive/*.json": "0o600",
+  "hub hub-token.txt": "0o644",
+  "客户端app.log(台架)": "0o644",
+  "客户端sync-state(台架)": "0o644",
+  "客户端hub-token(台架)": "0o644"
+ },
+ "IPv6": "不通（[Errno 61] Connection refused）",
+ "test-hub回归": "结果: 17 通过, 0 失败",
+ "selftest": "{\"pass\":true}"
+}
