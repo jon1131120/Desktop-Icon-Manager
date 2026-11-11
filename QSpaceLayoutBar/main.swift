@@ -364,6 +364,8 @@ func restoreLayout(at url: URL, restart: Bool = true) {
     }
     conf["itemAttrs"] = newAttrs
     // 全量还原桌面显示设置（图标大小/行列间距/标签位置/显示类别等）；旧快照无该字段则只还原原有两项
+    // （手动恢复=用户主动要求完整还原，含设置；自动同步链路不在这里——那边 specSettings(dst)
+    //   本来就随套应用本机参数，从不搬源机设置，无需防护）
     if let ds = snap["desktopSettings"] as? [String: Any] {
         for (k, v) in ds where k != "itemAttrs" { conf[k] = v }
     } else {
@@ -1545,6 +1547,28 @@ func applyRemote(_ snap: [String: Any], fp: String, file: String) {
         dstKey = ctx0.spec.key
     }
     logLine("sync: 应用 source=\(src) 套 \(snap["specKey"] ?? "?")→\(dstKey) matched=\(r.matched) moved=\(r.moved) kept=\(r.kept)")
+
+    // ── 第一刀：布局等价（moved=0）→ 跳过写盘 ──
+    // 全部图标都已在映射目标位：写 conf + 重启 QSpace 不会改变任何图标位置，
+    // 却会触发 QSpace 重排 → fp 变化 → 回声上报 → 对端再映射 → 跨套映射 12% 不可逆
+    // 的误差就在这个循环里累积成用户可见的「慢慢漂移」（2026-11-11 杰哥报告）。
+    // 只记状态（lastApplied/吸收期/baseline），桌面一个字节都不动。
+    if r.moved == 0 {
+        var st0 = loadSyncState()
+        st0["lastAppliedFingerprint"] = fp
+        st0["lastAppliedAt"] = Int(Date().timeIntervalSince1970)
+        let absorb0 = Int(Date().timeIntervalSince1970) + 60
+        st0["suppressBroadcastUntil"] = absorb0
+        rt.suppressUntil = absorb0
+        if let c2 = loadConf(), let s2 = makeGridSnapshot(conf: c2) {
+            st0["baselineFingerprint"] = s2["layoutFingerprint"] as? String ?? ""
+        }
+        saveSyncState(st0)
+        logLine("sync: 布局等价（moved=0）→ 跳过写盘，仅记状态（斩断回声）")
+        appDelegate?.rebuildMenu()
+        return
+    }
+
     atomicWriteConfAndRestartQSpace(r.newConf)
     microNudge(conf: r.newConf)
     let v = verifyAfterApply(snap)
