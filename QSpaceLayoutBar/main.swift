@@ -636,6 +636,9 @@ let SPEC_B = GridSpec(key: "B", cols: 19, rows: 9, topRight: 8, topRows: 4, armR
 let SPEC_C = GridSpec(key: "C", cols: 22, rows: 9, topRight: 6, topRows: 3, armRight: 3, zone2: (4, 6), floorStart: 7, midZone: (12, 17),
                        x0: 120, y0: 40, colStep: 113, rowStep: 148, lod: 96, hSp: 11, font: 11)
 let SPEC_ALL: [String: GridSpec] = ["A": SPEC_A, "B": SPEC_B, "C": SPEC_C]
+// （2026-11-12 曾短暂加过 SPEC_D=1920×1080，后确认那是 Kuycon 线松的降级识别态
+//   而非真实新屏，已撤销。线松期间 specForSize 无匹配 → machineTag 兜底按本机套摆，
+//   插回线恢复 5K(2560) 后自动回 C 套，现有逻辑天然覆盖，无需第四套。）
 
 /// 该套对应的 QSpace 显示设置（应用布局时一起写，保证参数随屏切换）
 func specSettings(_ s: GridSpec) -> [String: Any] {
@@ -1004,14 +1007,16 @@ func relocateStrayVolumes(_ conf: [String: Any]) -> [String: Any]? {
         let r = max(1, min(spec.rows, safeInt((Double(y) - spec.y0) / spec.rowStep, fallback: -1) + 1))
         occupied.insert("\(c),\(r)")
         let vipRow = vipSlotRow(n)
-        let isVolume = n.hasPrefix("/Volumes")
+        // 卷宗类判定：/Volumes 前缀 + 裸名虚拟挂载（DeviceFS 等：name 无路径且非桌面项——
+        //   第01次轮检后 MBP 实测 DeviceFS 占 (19,1) 躲过扫描 → 映射项永久差一格）
+        let isVolumeLike = n.hasPrefix("/Volumes") || (!n.isEmpty && !n.contains("/"))
         var mustEvict = false
         var why = ""
         if c == spec.cols && r <= 3 {
             if vipRow != r {           // 占了别人的 VIP 位（含 VIP 项串位）
                 mustEvict = true; why = "占 VIP\(r) 位"
             }
-        } else if c >= anchorColStart && isVolume && vipRow == nil {
+        } else if c >= anchorColStart && isVolumeLike && vipRow == nil {
             mustEvict = true; why = "临时卷宗入右锚区"
         }
         if mustEvict {
@@ -2009,7 +2014,8 @@ var specChangedAt = 0          // 屏幕/套切换时刻（冷静期内不上报
 var forceApplyOnce = false     // 切套后强制重应用一次（跨套像素不同，不能靠指纹跳过）
 // 应用逻辑版本：applyGridSnapshot 语义变化时 +1，全网首轮自动强制重应用（用新逻辑重算全部位置）
 // v2 = 屏号自愈 normalizeScreenIds（合盖残留旧屏号的项参与应用，位置修复）
-let applyLogicVersion = "2"
+let applyLogicVersion = "4"   // "4"（2026-11-12 13:3x）：杂卷二次挪位（col15/16）后全网强制重算，
+                          //   让 MBP/Air 按 Studio 版中枢（37 项 C 套）重新落位，清掉推移残留
 var hubFailStreak = 0          // 中枢连续失败次数
 var hubNextRetryAt = 0         // 下次允许重试的时刻（指数退避）
 // 同步运行时状态：被 syncQueue(后台) 与主线程同时读写 → 收敛到一个带锁的容器里

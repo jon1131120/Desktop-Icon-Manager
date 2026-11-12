@@ -76,16 +76,20 @@ for h,spec in [("mbp","C"),("air","A"),("studio","C")]:
     second_screen = sorted(n for n in only_h if n in other_screens)   # 中枢多的项在本机第二屏面 = 正常（多屏桌面，中枢只同步主屏）
     truly_missing = sorted(n for n in only_h if n not in other_screens)  # 整机都没有 = iCloud 未到货
     pos_diff=[]
+    # v3（2026-11-12）：比对改用「正向映射」——中枢格位 → mapCell(hub→本机套) → 期望本机格位。
+    #   旧 v2 用「本机→中枢的反推」比对，m6 非双射（往返有损 14 格），反推≠apply 实际写入值，
+    #   产生假差异（中枢=Studio 版时 Air 假报 5 项/MBP 假报 2 项，客户端 verify 实际 ok=true）。
+    #   正向公式与客户端 applyGridSnapshot 完全同源，比较才是对偶的。
     for nm in mine & hubn:
-        c,r=main[nm]
-        if mapCell(spec,hubspec,c,r)!=hubitems[nm]:
-            pos_diff.append((nm,(c,r),mapCell(spec,hubspec,c,r),hubitems[nm]))
+        exp = mapCell(hubspec, spec, *hubitems[nm])
+        if main[nm] != exp:
+            pos_diff.append((nm, main[nm], exp, hubitems[nm]))
     hard = bool(only_l or truly_missing or pos_diff)
     status = "✓" if not hard else "✗"
     extra = f" | 第二屏面 {len(second_screen)} 项（正常）" if second_screen else ""
     print(f"  {h}: {status} 本机主屏 {len(main)} 项 | 名单差 本机{len(only_l)}/中枢缺{len(truly_missing)} | 位置差 {len(pos_diff)}{extra}")
     for d in pos_diff[:5]:
-        print(f"      {d[0][:26]:28s} {h}{d[1]} → 归一{d[2]}  中枢{d[3]}")
+        print(f"      {d[0][:26]:28s} {h}实际{d[1]} → 期望{d[2]}  中枢{d[3]}")
     for n in truly_missing[:5]:
         print(f"      中枢有本机整机无: {n[:40]}")
     if hard: fails+=1
